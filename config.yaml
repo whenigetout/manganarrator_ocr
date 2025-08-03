@@ -1,0 +1,15 @@
+input_root_folder: /mnt/e/pcc_shared/manga_narrator_runs/inputs
+output_root_folder: /mnt/e/pcc_shared/manga_narrator_runs/outputs
+
+# Model to use for OCR
+ocr_model: qwen2.5vl
+qwen_model_id: unsloth/Qwen2.5-VL-3B-Instruct-unsloth-bnb-4bit #options: unsloth/Qwen2.5-VL-3B-Instruct-unsloth-bnb-4bit, unsloth/Qwen2.5-VL-7B-Instruct-bnb-4bit
+
+output_format: jsonl
+save_bounding_boxes: false
+filter_sfx: true
+log_level: info
+batch_size: 8
+
+# For testing/debugging only
+save_uploaded_images: true
