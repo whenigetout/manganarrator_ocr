@@ -22,6 +22,22 @@ def save_jsonl(results, path: Path):
         for item in results:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
+import re
+
+def fix_casing(text):
+    # If the text is all uppercase or mostly uppercase, fix it
+    # You can adjust the threshold for "mostly uppercase"
+    uppercase_ratio = sum(1 for c in text if c.isupper()) / (len(text) or 1)
+    if uppercase_ratio > 0.7:
+        text = text.lower()
+    # Capitalize first letter of each sentence
+    def capitalize_match(match):
+        return match.group(1) + match.group(2).upper()
+    # This regex finds sentence boundaries
+    text = re.sub(r'(^|(?<=[.!?]\s))([a-z])', capitalize_match, text)
+    return text
+
+import threading
 
 class Timer:
     last_duration = 0.0
@@ -32,6 +48,16 @@ class Timer:
         self.use_spinner = use_spinner
         self.console = Console()
         self.status = None
+        self._stop_event = threading.Event()
+        self._timer_thread = None
+
+    def _live_counter(self):
+        while not self._stop_event.is_set():
+            elapsed = int(time.perf_counter() - self.start_time)
+            self.console.print(
+                f"[cyan]{self.label}[/] [yellow]Elapsed: {elapsed}s[/]", end="\r"
+            )
+            time.sleep(1)
 
     def __enter__(self):
         if self.use_spinner:
@@ -41,20 +67,24 @@ class Timer:
                 spinner_style="bold green",
             )
             self.status.__enter__()
-
         self.start_time = time.perf_counter()
+        self._stop_event.clear()
+        self._timer_thread = threading.Thread(target=self._live_counter, daemon=True)
+        self._timer_thread.start()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self._stop_event.set()
+        if self._timer_thread is not None:
+            self._timer_thread.join()
         duration = time.perf_counter() - self.start_time
         Timer.last_duration = duration
 
         if self.use_spinner and self.status:
             self.status.__exit__(exc_type, exc_val, exc_tb)
-
         if self.label:
             self.console.print(
-                f"✅ [green]{self.label}[/] done in [yellow]{duration:.2f}s[/]"
+                f"\n✅ [green]{self.label}[/] done in [yellow]{duration:.2f}s[/]"
             )
 
 
@@ -98,7 +128,7 @@ def parse_dialogue(text: str, image_id: str, image_file_name: str, input_folder_
             "speaker": speaker.strip(),
             "gender": gender.strip(),
             "emotion": emotion.strip(),
-            "text": content.strip()
+            "text": fix_casing(content).strip()
         })
 
     if not dialogue:

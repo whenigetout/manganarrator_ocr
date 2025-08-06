@@ -25,7 +25,8 @@ processor = OCRProcessor("config.yaml")
 @app.post("/ocr/image")
 async def ocr_single_image(
     file: UploadFile = File(...),
-    save_uploaded_image: Optional[bool] = Query(None)
+    save_uploaded_image: Optional[bool] = Query(None),
+    custom_prompt: Optional[str] = None
 ):
     try:
         config_saving_uploaded_image = processor.config.get("save_uploaded_images", True)
@@ -44,7 +45,7 @@ async def ocr_single_image(
         with open(image_path, "wb") as f:
             f.write(await file.read())
 
-        result = processor.process_image(image_path, base_folder=image_path.parent)
+        result = processor.process_image(image_path, base_folder=image_path.parent, prompt=custom_prompt)
 
         if not should_save:
             shutil.rmtree(temp_dir)
@@ -63,7 +64,8 @@ async def ocr_from_folder(
     ..., 
     description="Example: /mnt/e/pcc_shared/manga_narrator_runs/inputs/test_mangas/test_manga1"
     ),
-    output_all_results_to_json: Optional[bool] = Query(False)
+    output_all_results_to_json: Optional[bool] = Query(False),
+    custom_prompt: Optional[str] = None
 ):
     try:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -80,7 +82,8 @@ async def ocr_from_folder(
 
         results = processor.process_batch(folder_path=folder_path, 
                                           input_folder_rel_path_from_input_root=input_folder_rel_path_from_input_root,
-                                          run_id=run_id)
+                                          run_id=run_id,
+                                          prompt=custom_prompt)
 
         processor.save_output(results, run_name=run_id)
 

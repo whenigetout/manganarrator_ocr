@@ -40,7 +40,8 @@ class OCRProcessor:
 
     def process_image(self, img_path: Path, base_folder: Optional[Path] = None, 
                       input_folder_rel_path_from_input_root: Optional[Path] = None,
-                      run_id: Optional[str]=None
+                      run_id: Optional[str]=None,
+                      prompt: Optional[str]=None
                       ) -> Dict:
         try:
             image_id = str(uuid.uuid4())
@@ -54,7 +55,7 @@ class OCRProcessor:
                         "throughput": 59.1
                     }
                 else:
-                    result = self.backend.infer_image(img_path)
+                    result = self.backend.infer_image(img_path, prompt=prompt)
 
 
             base = base_folder or self.input_folder
@@ -85,7 +86,11 @@ class OCRProcessor:
                 "parsed_dialogue": []
             }
 
-    def process_batch(self, folder_path: Path, input_folder_rel_path_from_input_root: Path, run_id: Optional[str]=None) -> Dict[str, List[Dict]]:
+    def process_batch(self, folder_path: Path, 
+                      input_folder_rel_path_from_input_root: Path, 
+                      run_id: Optional[str]=None,
+                      prompt: Optional[str]=None
+                      ) -> Dict[str, List[Dict]]:
         folder = Path(folder_path).resolve()
         if not folder.exists() or not folder.is_dir():
             raise ValueError(f"Invalid folder path: {folder}")
@@ -103,7 +108,8 @@ class OCRProcessor:
                 img_path,
                 base_folder=folder,
                 input_folder_rel_path_from_input_root=img_path.parent.relative_to(self.input_folder),
-                run_id=run_id
+                run_id=run_id,
+                prompt=prompt
             )
             rel_folder = str(img_path.parent.relative_to(self.input_folder))
             grouped_results[rel_folder].append(result)

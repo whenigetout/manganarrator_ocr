@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Set environment name
-ENV_NAME="qwenfix"
+ENV_NAME="qwen"
 
 # Activate Conda
 source ~/miniconda3/etc/profile.d/conda.sh
