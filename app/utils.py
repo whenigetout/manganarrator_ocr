@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 # For rich spinner/loading spinner in console
 from rich.console import Console
+from PIL import Image
 
 import traceback
 
@@ -153,3 +154,116 @@ def clear_folders(folder_names=["input", "output"]) -> None:
                 print(f"✅ Deleted: {item}")
             except Exception as e:
                 print(f"❌ Failed: {item} — {e}")
+
+import os
+from pathlib import Path
+
+def optimal_split(image_path, output_prefix, max_chunk=7000, min_chunk=4000):
+    """
+    Splits a tall image (e.g., manhwa/webtoon panel) into optimally sized vertical chunks.
+
+    Logic:
+        - If the image height is less than or equal to max_chunk, saves the image as a single chunk.
+        - Otherwise, splits the image vertically into chunks of size `max_chunk` as much as possible.
+        - If the remainder (last chunk) is >= min_chunk, keeps it as the last chunk.
+        - If the remainder is < min_chunk, merges it into the previous chunk(s) and splits those into two nearly equal sizes.
+        - Ensures no chunk is smaller than `min_chunk` or larger than `max_chunk` (except possibly for balancing the last two chunks).
+        - Output files are named as `output_prefix_partN.jpg` in order, preserving the original sort order.
+
+    Args:
+        image_path (str or Path): Path to the input image.
+        output_prefix (str or Path): Prefix for output split images.
+        max_chunk (int): Maximum allowed chunk height (pixels).
+        min_chunk (int): Minimum allowed chunk height (pixels).
+
+    Returns:
+        None. (Writes output images to disk.)
+    
+    Notes:
+        - This is meant for use before OCR processing, so that each resulting image chunk can be processed efficiently.
+        - Designed to avoid tiny, mostly-empty panels and minimize awkward splits.
+    """
+    img = Image.open(image_path)
+    width, height = img.size
+    s = height
+    max = max_chunk
+    min_ = min_chunk
+
+    print(f"img height is: {s}")
+
+    if s <= max:
+        img.save(f"{output_prefix}_part1.jpg")
+        print(f"Image is short ({height}px). Saved as a single part.")
+        return
+
+    q = s // max
+    r = s % max
+
+    cuts = []
+    if q == 0:
+        # Should not happen, as s > max
+        img.save(f"{output_prefix}_part1.jpg")
+        print(f"Error: q=0 for s={s}, max={max}")
+        return
+    elif r >= min_:
+        # q chunks of max, and one r-sized chunk
+        for i in range(q):
+            cuts.append(max)
+        cuts.append(r)
+    else:
+        r_new = s - (q - 1) * max
+        # Optionally split last big chunk into two nearly equal chunks for better balance
+        half1 = r_new // 2
+        half2 = r_new - half1
+        for i in range(q - 1):
+            cuts.append(max)
+        cuts.append(half1)
+        cuts.append(half2)
+
+    # Now save slices
+    y = 0
+    for idx, h in enumerate(cuts):
+        img_crop = img.crop((0, y, width, y + h))
+        img_crop.save(f"{output_prefix}_part{idx + 1}.jpg")
+        print(f"Saved {output_prefix}_part{idx + 1}.jpg ({y} to {y + h}, size={h})")
+        y += h
+
+    print(f"Done. Total splits: {len(cuts)}")
+
+def preprocess_and_split_tall_images(folder_path, max_chunk, min_chunk):
+    """
+    Scans all images in a folder. If any are taller than max_chunk, splits them using optimal_split,
+    replaces originals with split images, and logs actions clearly.
+    """
+    exts = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
+    folder_path = Path(folder_path)
+    for img_file in sorted(folder_path.glob('*')):
+        if not img_file.suffix.lower() in exts:
+            continue
+
+        with Image.open(img_file) as img:
+            height = img.height
+            if height <= max_chunk:
+                # No split needed
+                continue
+
+        # Split and report
+        base = img_file.stem
+        prefix = img_file.parent / (base + "_split")
+        print(f"\n[Split] {img_file.name}: height={height} > max_chunk={max_chunk}")
+        optimal_split(str(img_file), str(prefix), max_chunk=max_chunk, min_chunk=min_chunk)
+
+        # Delete the original tall image
+        img_file.unlink()
+        print(f"[Delete] Removed oversized original: {img_file.name}")
+
+        # Rename splits to match original sort order (important!)
+        for idx, split_file in enumerate(sorted(prefix.parent.glob(f"{prefix.stem}_part*.jpg")), 1):
+            new_name = f"{base}_part{idx:02d}{img_file.suffix}"
+            new_path = img_file.parent / new_name
+            split_file.rename(new_path)
+            print(f"[Rename] {split_file.name} → {new_name}")
+
+        # Optionally, remove split prefix files (they were just renamed)
+
+    print("[Preprocessing] Done splitting tall images.\n")

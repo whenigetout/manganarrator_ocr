@@ -9,7 +9,7 @@ import uuid
 import json
 from datetime import datetime
 from fastapi.middleware.cors import CORSMiddleware
-from app.utils import log_exception
+from app.utils import log_exception, preprocess_and_split_tall_images
 from glob import glob
 
 app = FastAPI()
@@ -79,6 +79,13 @@ async def ocr_from_folder(
         if not config_input_root.exists() or not config_input_root.is_dir():
             return JSONResponse(status_code=400, content={"error": "Invalid input-root-folder path in config"})
         input_folder_rel_path_from_input_root = folder_path.relative_to(config_input_root)
+
+        config_min_img_chunk_size = processor.config.get("min_chunk_size", 4800)
+        config_max_img_chunk_size = processor.config.get("max_chunk_size", 7000)
+
+        preprocess_and_split_tall_images(folder_path=folder_path,
+                                         max_chunk=config_max_img_chunk_size,
+                                         min_chunk=config_min_img_chunk_size)
 
         results = processor.process_batch(folder_path=folder_path, 
                                           input_folder_rel_path_from_input_root=input_folder_rel_path_from_input_root,
