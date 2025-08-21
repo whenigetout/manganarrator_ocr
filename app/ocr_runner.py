@@ -10,7 +10,7 @@ from app.utils import parse_dialogue
 import re
 import os
 from collections import defaultdict
-
+from PIL import Image
 
 def natural_key(s):
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
@@ -46,13 +46,20 @@ class OCRProcessor:
         try:
             image_id = str(uuid.uuid4())
             img_name = img_path.name
+
+            # Image dimensions
+            with Image.open(img_path) as im:
+                width, height = im.size
+
             with Timer(f"🖼️ Process Image {img_name}"):
                 if self.mock_mode:
                     result = {
                         "text": "[Speaker 1 | female | happy]: \"This is a mock line.\"\n[Speaker 2 | male | angry]: \"Mock angry line here.\"",
                         "input_tokens": 42,
                         "output_tokens": 17,
-                        "throughput": 59.1
+                        "throughput": 59.1,
+                        "image_width": width,
+                        "image_height": height,
                     }
                 else:
                     result = self.backend.infer_image(img_path, prompt=prompt)
@@ -73,7 +80,9 @@ class OCRProcessor:
                 "image_id": image_id,
                 "run_id": run_id,
                 "result": result,
-                "parsed_dialogue": parsed
+                "parsed_dialogue": parsed,
+                "image_width": width,
+                "image_height": height,
             }
 
         except Exception as e:
@@ -83,7 +92,9 @@ class OCRProcessor:
                 "image_rel_path_from_root": input_folder_rel_path_from_input_root,
                 "image_id": image_id,
                 "error": str(e),
-                "parsed_dialogue": []
+                "parsed_dialogue": [],
+                "image_width": width,
+                "image_height": height,
             }
 
     def process_batch(self, folder_path: Path, 
