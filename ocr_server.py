@@ -11,6 +11,7 @@ from datetime import datetime
 from fastapi.middleware.cors import CORSMiddleware
 from app.utils import log_exception, preprocess_and_split_tall_images
 from glob import glob
+import httpx  # add at top
 
 app = FastAPI()
 app.add_middleware(
@@ -65,6 +66,7 @@ async def ocr_from_folder(
     description="Example: /mnt/e/pcc_shared/manga_narrator_runs/inputs/test_mangas/test_manga1"
     ),
     output_all_results_to_json: Optional[bool] = Query(False),
+    attach_bboxes: Optional[bool] = Query(True),   # 👈 new flag
     custom_prompt: Optional[str] = None
 ):
     try:
@@ -94,6 +96,24 @@ async def ocr_from_folder(
 
         processor.save_output(results, run_name=run_id)
 
+        # ---------------------------------------------------
+        #  STEP 2: augment with PaddleOCR
+        # ---------------------------------------------------
+        if attach_bboxes:
+            out_dir = Path(processor.output_base) / run_id
+            for json_path in out_dir.rglob("ocr_output.json"):
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(
+                        processor.paddle_ocr_api,  # adjust port if diff
+                        data={"ocr_json_path": str(json_path)}
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        print(f"✅ PaddleOCR augmentation OK: {data['output_file']}")
+                    else:
+                        print(f"⚠️ PaddleOCR augmentation failed for {json_path}: {resp.text}")
+        # ---------------------------------------------------
+
         response = {
             "status": "success",
             "run_id": run_id,
@@ -109,7 +129,6 @@ async def ocr_from_folder(
     except Exception as e:
         log_exception("Exception during batch processing:")
         return JSONResponse(status_code=500, content={"error": str(e)})
-
 
 
 @app.get("/ocr/results")

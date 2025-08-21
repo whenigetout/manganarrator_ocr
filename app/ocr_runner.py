@@ -23,6 +23,7 @@ class OCRProcessor:
         self.input_folder = Path(self.config["input_root_folder"]).resolve()
         self.output_base = Path(self.config["output_root_folder"]).resolve()
         self.model_name = self.config["ocr_model"]
+        self.paddle_ocr_api = self.config["paddle_ocr_api"]
         self.mock_mode = os.getenv("MOCK_OCR", "0") == "1"
 
         ensure_output_dir(self.output_base)

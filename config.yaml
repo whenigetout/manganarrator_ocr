@@ -17,3 +17,6 @@ save_uploaded_images: true
 # For img splitting in case of tall images
 min_chunk_size: 4000
 max_chunk_size: 6600
+
+# Paddle OCR API (local)
+paddle_ocr_api: http://localhost:6002/paddleocr/augment_json
