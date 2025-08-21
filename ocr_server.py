@@ -66,7 +66,7 @@ async def ocr_from_folder(
     description="Example: /mnt/e/pcc_shared/manga_narrator_runs/inputs/test_mangas/test_manga1"
     ),
     output_all_results_to_json: Optional[bool] = Query(False),
-    attach_bboxes: Optional[bool] = Query(True),   # 👈 new flag
+    attach_bboxes: Optional[bool] = Query(True),
     custom_prompt: Optional[str] = None
 ):
     try:
@@ -94,24 +94,61 @@ async def ocr_from_folder(
                                           run_id=run_id,
                                           prompt=custom_prompt)
 
+        out_dir = Path(processor.output_base) / run_id
         processor.save_output(results, run_name=run_id)
 
         # ---------------------------------------------------
-        #  STEP 2: augment with PaddleOCR
+        #  STEP 2: call PaddleOCR augmentation
         # ---------------------------------------------------
         if attach_bboxes:
-            out_dir = Path(processor.output_base) / run_id
             for json_path in out_dir.rglob("ocr_output.json"):
                 async with httpx.AsyncClient() as client:
                     resp = await client.post(
-                        processor.paddle_ocr_api,  # adjust port if diff
+                        processor.paddle_ocr_api,  # URL from config
                         data={"ocr_json_path": str(json_path)}
                     )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        print(f"✅ PaddleOCR augmentation OK: {data['output_file']}")
-                    else:
-                        print(f"⚠️ PaddleOCR augmentation failed for {json_path}: {resp.text}")
+                if resp.status_code != 200:
+                    print(f"⚠️ PaddleOCR augmentation failed for {json_path}: {resp.text}")
+                    continue
+                data = resp.json()
+                new_json_path = Path(data["output_file"])
+
+                # ---------------------------------------------------
+                #  STEP 3: attach Paddle bboxes to Qwen OCR dialogues
+                # ---------------------------------------------------
+                with open(new_json_path, "r", encoding="utf-8") as f:
+                    paddle_data = json.load(f)
+                with open(json_path, "r", encoding="utf-8") as f:
+                    qwen_data = json.load(f)
+
+                # Simple loose matcher
+                from difflib import SequenceMatcher
+                def best_match(text, candidates):
+                    best, score = None, 0
+                    for idx, cand in enumerate(candidates):
+                        s = SequenceMatcher(None, text.lower(), cand.lower()).ratio()
+                        if s > score:
+                            best, score = idx, s
+                    return best if score > 0.6 else None  # loose threshold
+
+                # Build mapping of rec_texts -> rec_boxes
+                paddle_texts = paddle_data.get("rec_texts", [])
+                paddle_boxes = paddle_data.get("rec_boxes", [])
+
+                for img_item in qwen_data:
+                    for dlg in img_item.get("dialogs", []):
+                        txt = dlg.get("text", "")
+                        idx = best_match(txt, paddle_texts)
+                        if idx is not None:
+                            dlg["bbox"] = paddle_boxes[idx]
+                        else:
+                            dlg["bbox"] = []
+
+                # Save final JSON
+                final_json_path = new_json_path.parent / "ocr_output_with_bboxes.json"
+                with open(final_json_path, "w", encoding="utf-8") as f:
+                    json.dump(qwen_data, f, indent=2, ensure_ascii=False)
+                print(f"✅ Final JSON with bboxes saved: {final_json_path}")
         # ---------------------------------------------------
 
         response = {
@@ -119,9 +156,6 @@ async def ocr_from_folder(
             "run_id": run_id,
             "count": len(results),
         }
-
-        # By default this api only returns the run_id from which the results json can be queried if needed, 
-        # to avoid seeing a very lengthy json output every time this api is called 
         if output_all_results_to_json:
             response["results"] = results
         return response
