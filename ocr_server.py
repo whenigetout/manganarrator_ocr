@@ -11,7 +11,8 @@ from datetime import datetime
 from fastapi.middleware.cors import CORSMiddleware
 from app.utils import log_exception, preprocess_and_split_tall_images
 from glob import glob
-import httpx  # add at top
+import httpx 
+from app.special_utils.paddle_bbox_mapper import PaddleBBoxMapper
 
 app = FastAPI()
 app.add_middleware(
@@ -22,6 +23,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 processor = OCRProcessor("config.yaml")
+bbox_mapper = PaddleBBoxMapper(debug=False)  # turn off debug in prod if noisy
 
 @app.post("/ocr/image")
 async def ocr_single_image(
@@ -62,13 +64,15 @@ async def ocr_single_image(
 @app.post("/ocr/folder")
 async def ocr_from_folder(
     input_path: str = Form(
-    ..., 
-    description="Example: /mnt/e/pcc_shared/manga_narrator_runs/inputs/test_mangas/test_manga1"
+        ..., 
+        description="Example: /mnt/e/pcc_shared/manga_narrator_runs/inputs/test_mangas/test_manga1"
     ),
     output_all_results_to_json: Optional[bool] = Query(False),
     attach_bboxes: Optional[bool] = Query(True),
+    annotate_bboxes: Optional[bool] = Query(False),   
     custom_prompt: Optional[str] = None
 ):
+
     try:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         run_id = f"api_batch_{timestamp}_{uuid.uuid4().hex[:8]}"
@@ -112,43 +116,29 @@ async def ocr_from_folder(
                     continue
                 data = resp.json()
                 new_json_path = Path(data["output_file"])
-
                 # ---------------------------------------------------
-                #  STEP 3: attach Paddle bboxes to Qwen OCR dialogues
+                #  STEP 3: Attach Paddle B-Boxes to Qwen OCR Dialogues (new robust mapper)
                 # ---------------------------------------------------
                 with open(new_json_path, "r", encoding="utf-8") as f:
                     paddle_data = json.load(f)
-                with open(json_path, "r", encoding="utf-8") as f:
-                    qwen_data = json.load(f)
 
-                # Simple loose matcher
-                from difflib import SequenceMatcher
-                def best_match(text, candidates):
-                    best, score = None, 0
-                    for idx, cand in enumerate(candidates):
-                        s = SequenceMatcher(None, text.lower(), cand.lower()).ratio()
-                        if s > score:
-                            best, score = idx, s
-                    return best if score > 0.6 else None  # loose threshold
+                # Map in-place; prints per-dialogue debug if bbox_mapper.debug = True
+                paddle_data = bbox_mapper.map_batch(paddle_data if isinstance(paddle_data, list) else [paddle_data])
 
-                # Build mapping of rec_texts -> rec_boxes
-                paddle_texts = paddle_data.get("rec_texts", [])
-                paddle_boxes = paddle_data.get("rec_boxes", [])
-
-                for img_item in qwen_data:
-                    for dlg in img_item.get("dialogs", []):
-                        txt = dlg.get("text", "")
-                        idx = best_match(txt, paddle_texts)
-                        if idx is not None:
-                            dlg["bbox"] = paddle_boxes[idx]
-                        else:
-                            dlg["bbox"] = []
-
-                # Save final JSON
-                final_json_path = new_json_path.parent / "ocr_output_with_bboxes.json"
+                # Save final JSON with bboxes (same path pattern as before)
+                final_json_path = Path(new_json_path).parent / "ocr_output_with_bboxes.json"
                 with open(final_json_path, "w", encoding="utf-8") as f:
-                    json.dump(qwen_data, f, indent=2, ensure_ascii=False)
+                    json.dump(paddle_data, f, indent=2, ensure_ascii=False)
                 print(f"✅ Final JSON with bboxes saved: {final_json_path}")
+
+                # Optionally render annotated image(s) right next to the JSON ---
+                if annotate_bboxes:
+                    image_root = Path(processor.config.get("input_root_folder")).resolve()
+                    out_dir_for_images = final_json_path.parent
+                    items = paddle_data if isinstance(paddle_data, list) else [paddle_data]
+                    saved_imgs = bbox_mapper.annotate_batch(items, image_root=image_root, out_dir=out_dir_for_images)
+                    for p in saved_imgs:
+                        print(f"🖼️ Annotated image saved: {p}")
         # ---------------------------------------------------
 
         response = {

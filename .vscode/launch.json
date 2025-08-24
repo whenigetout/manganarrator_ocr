@@ -1,0 +1,25 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: FastAPI (paddleocr_server)",
+            "type": "python",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "ocr_server:app", // this should be "filename:FastAPI_instance"
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "7860",
+                "--reload"
+            ],
+            "jinja": true,
+            "justMyCode": false,
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        }
+    ]
+}
