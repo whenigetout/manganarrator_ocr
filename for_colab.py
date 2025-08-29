@@ -106,5 +106,71 @@ async def ocr_from_folder(
         log_exception("Exception during batch processing:")
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+# =================== CLI passthrough for ocr_from_folder ===================
+if __name__ == "__main__":
+    import argparse, inspect, sys, json
+    from pathlib import Path
 
+    # --- robust bool parser ---
+    def str2bool(v):
+        if isinstance(v, bool): return v
+        s = str(v).strip().lower()
+        if s in {"1","true","t","yes","y","on"}:  return True
+        if s in {"0","false","f","no","n","off"}: return False
+        raise argparse.ArgumentTypeError(f"Invalid boolean: {v}")
 
+    parser = argparse.ArgumentParser(
+        description="Thin CLI wrapper: call ocr_from_folder(...) with provided args."
+    )
+    # common args (aliases supported)
+    parser.add_argument("--input-dir",  "--input_dir",  dest="input_dir",  required=True,
+                        help="Folder containing images (can be nested if --recursive).")
+    parser.add_argument("--output-dir", "--output_dir", dest="output_dir", required=True,
+                        help="Folder to write outputs (JSON, etc.).")
+
+    # optional flags (defaults are conservative and can be changed)
+    parser.add_argument("--attach-bboxes", "--attach_bboxes", dest="attach_bboxes",
+                        type=str2bool, default=False,
+                        help="If true, attach PaddleOCR bboxes (your function must support it).")
+    parser.add_argument("--recursive", type=str2bool, default=True,
+                        help="Recurse into subfolders.")
+    parser.add_argument("--run-id", "--run_id", dest="run_id", default=None,
+                        help="Optional run_id to tag outputs.")
+    parser.add_argument("--write-after-each-page", "--write_after_each_page",
+                        dest="write_after_each_page", type=str2bool, default=True,
+                        help="If supported, write incremental JSON after each page.")
+
+    # you can add more flags here if your function accepts them, e.g. min/max chunk
+    parser.add_argument("--min-chunk", "--min_chunk", dest="min_chunk", type=int, default=None)
+    parser.add_argument("--max-chunk", "--max_chunk", dest="max_chunk", type=int, default=None)
+
+    args = parser.parse_args()
+
+    # normalize basic path-like args to strings (most fns accept str fine)
+    args.input_dir  = str(Path(args.input_dir))
+    args.output_dir = str(Path(args.output_dir))
+
+    # import the function from this file's namespace
+    try:
+        fn = ocr_from_folder  # defined earlier in for_colab.py
+    except NameError as e:
+        print("ERROR: ocr_from_folder(...) is not defined in this module.", file=sys.stderr)
+        raise
+
+    # only pass kwargs that the function actually declares
+    sig = inspect.signature(fn)
+    all_args = vars(args)
+    call_kwargs = {k: v for k, v in all_args.items()
+                   if (v is not None) and (k in sig.parameters)}
+
+    try:
+        result = fn(**call_kwargs)
+        # pretty-print if the function returns something JSONable
+        try:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        except Exception:
+            print(result if result is not None else "Done.")
+    except Exception as exc:
+        print("ERROR during ocr_from_folder(...):", exc, file=sys.stderr)
+        raise
+# ============================================================================
