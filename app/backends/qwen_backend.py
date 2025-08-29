@@ -7,7 +7,20 @@ from typing import List, Dict, Optional, Union
 
 from app.utils import Timer
 from qwen_vl_utils import process_vision_info
+import os, importlib.util, torch
 
+def _flash_attn_available() -> bool:
+    try:
+        return importlib.util.find_spec("flash_attn") is not None
+    except Exception:
+        return False
+
+def _pick_attn_impl(use_flash_flag: bool) -> str:
+    """Return transformers attn_implementation."""
+    if use_flash_flag and _flash_attn_available() and torch.cuda.is_available():
+        return "flash_attention_2"     # use FlashAttention v2
+    # fallback: SDPA on CUDA, eager everywhere else
+    return "sdpa" if torch.cuda.is_available() else "eager"
 
 class QwenOCRBackend:
     def __init__(self, config: dict):
@@ -22,6 +35,11 @@ class QwenOCRBackend:
 
     def _load_model(self):
         print(f"\n📦 Loading Qwen2.5-VL model: {self.model_id}")
+        use_flash_flag = bool(self.use_flash_attn)
+        has_cuda = torch.cuda.is_available()
+        flash_ok = use_flash_flag and has_cuda and _flash_attn_available()
+
+
         with Timer("🔧 Load processor"):
             self.processor = AutoProcessor.from_pretrained(
                 self.model_id,
@@ -38,6 +56,30 @@ class QwenOCRBackend:
                 attn_implementation="flash_attention_2",
                 device_map="auto"
             )
+
+            if flash_ok:
+                # === FLASH PATH: keep your existing behavior here (unchanged) ===
+                # If your original code had any extra kwargs, keep them.
+                self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                                self.model_id,
+                                trust_remote_code=True,
+                                torch_dtype=torch.bfloat16 if flash_ok else torch.float16,
+                                attn_implementation="flash_attention_2",
+                                device_map="auto"
+                            )
+            else:
+                # === NON-FLASH PATH: force a non-flash backend so config is respected ===
+                non_flash_impl = "sdpa" if has_cuda else "eager"
+                try:
+                    self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                        self.model_id,
+                        trust_remote_code=True,
+                        torch_dtype=torch.bfloat16 if flash_ok else torch.float16,
+                        attn_implementation=non_flash_impl,
+                        device_map="auto"
+                    )
+                except TypeError:
+                    pass
 
     def infer_image(self, img_path: Path, prompt: Optional[str] = None) -> str:
         image = Image.open(img_path).convert("RGB")

@@ -20,3 +20,6 @@ max_chunk_size: 6600
 
 # Paddle OCR API (local)
 paddle_ocr_api: http://localhost:6002/paddleocr/augment_json
+
+# For flass attn, turn off when not on local machine
+use_flash_attn: false
