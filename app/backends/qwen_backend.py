@@ -45,16 +45,7 @@ class QwenOCRBackend:
                 self.model_id,
                 trust_remote_code=True,
                 use_fast=True,
-                USE_FLASH_ATTN=self.use_flash_attn
-            )
-
-        with Timer("⚙️ Load model"):
-            self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                self.model_id,
-                trust_remote_code=True,
-                torch_dtype=torch.bfloat16 if self.use_flash_attn else torch.float16,
-                attn_implementation="flash_attention_2",
-                device_map="auto"
+                USE_FLASH_ATTN=flash_ok
             )
 
             if flash_ok:
