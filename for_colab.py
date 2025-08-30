@@ -152,3 +152,37 @@ if __name__ == "__main__":
 
     print(result if result is not None else "Done.")
 
+    import json
+from starlette.responses import JSONResponse
+
+# 'result' is what ocr_from_folder returns
+if isinstance(result, JSONResponse):
+    try:
+        data = json.loads(result.body.decode("utf-8"))
+    except Exception:
+        # Starlette may keep .body as bytes already; fallback
+        try:
+            data = result.media  # if you used Starlette 0.38+
+        except Exception:
+            data = None
+
+    print("API result:", data)
+
+    # helpful logs
+    if isinstance(data, dict):
+        # common keys your FastAPI route likely returns — adjust if different
+        out_dir  = data.get("output_dir") or data.get("output_path") or data.get("out_dir")
+        written  = data.get("written") or data.get("pages") or data.get("files")
+        print("Resolved output_dir:", out_dir)
+        print("Written entries:", written)
+
+    # regardless of the response, list what’s on disk so you can see files
+    import glob, os
+    root = os.environ.get("OUT_DIR_OVERRIDE", "")  # ignore if you didn't set this
+    search_root = out_dir if os.path.isdir(out_dir) else (out_dir or ".")
+    cands = glob.glob(search_root + "/**/*.json*", recursive=True)
+    print(f"Found {len(cands)} JSON/JSONL files under {search_root}:")
+    for p in sorted(cands)[:20]:
+        print(" -", p)
+
+
