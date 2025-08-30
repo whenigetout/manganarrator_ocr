@@ -1,5 +1,5 @@
-input_root_folder: /Users/tk/Downloads/AJ/dev/manganarrator_runs/inputs #/mnt/e/pcc_shared/manga_narrator_runs/inputs
-output_root_folder: /Users/tk/Downloads/AJ/dev/manganarrator_runs/outputs #/mnt/e/pcc_shared/manga_narrator_runs/outputs
+input_root_folder: /content/drive/MyDrive/MANGA_NARRATOR_RUNS/inputs #/mnt/e/pcc_shared/manga_narrator_runs/inputs
+output_root_folder: /content/drive/MyDrive/MANGA_NARRATOR_RUNS/outputs #/mnt/e/pcc_shared/manga_narrator_runs/outputs
 
 # Model to use for OCR
 ocr_model: qwen2.5vl

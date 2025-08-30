@@ -48,6 +48,7 @@ class QwenOCRBackend:
                 USE_FLASH_ATTN=flash_ok
             )
 
+        with Timer("⚙️ Load model"):
             if flash_ok:
                 # === FLASH PATH: keep your existing behavior here (unchanged) ===
                 # If your original code had any extra kwargs, keep them.

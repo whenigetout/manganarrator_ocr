@@ -13,6 +13,7 @@ from app.utils import log_exception, preprocess_and_split_tall_images
 from glob import glob
 import httpx 
 from app.special_utils.paddle_bbox_mapper import PaddleBBoxMapper
+import asyncio, inspect
 
 processor = OCRProcessor("config.yaml")
 bbox_mapper = PaddleBBoxMapper(debug=False)  # turn off debug in prod if noisy
@@ -108,69 +109,46 @@ async def ocr_from_folder(
 
 # =================== CLI passthrough for ocr_from_folder ===================
 if __name__ == "__main__":
-    import argparse, inspect, sys, json
+    import argparse
     from pathlib import Path
 
-    # --- robust bool parser ---
-    def str2bool(v):
-        if isinstance(v, bool): return v
-        s = str(v).strip().lower()
-        if s in {"1","true","t","yes","y","on"}:  return True
-        if s in {"0","false","f","no","n","off"}: return False
-        raise argparse.ArgumentTypeError(f"Invalid boolean: {v}")
+    parser = argparse.ArgumentParser(description="Run OCR on a folder (no servers).")
 
-    parser = argparse.ArgumentParser(
-        description="Thin CLI wrapper: call ocr_from_folder(...) with provided args."
-    )
-    # common args (aliases supported)
-    parser.add_argument("--input-dir",  "--input_dir",  dest="input_dir",  required=True,
-                        help="Folder containing images (can be nested if --recursive).")
-    parser.add_argument("--output-dir", "--output_dir", dest="output_dir", required=True,
-                        help="Folder to write outputs (JSON, etc.).")
+    # IMPORTANT: map all common flags to the SAME dest: input_path
+    parser.add_argument("--input-path", "--input_path", "--input-dir", "--input_dir",
+                        dest="input_path", required=True,
+                        help="Folder with images (can be nested if --recursive).")
 
-    # optional flags (defaults are conservative and can be changed)
-    parser.add_argument("--attach-bboxes", "--attach_bboxes", dest="attach_bboxes",
-                        type=str2bool, default=False,
-                        help="If true, attach PaddleOCR bboxes (your function must support it).")
-    parser.add_argument("--recursive", type=str2bool, default=True,
-                        help="Recurse into subfolders.")
-    parser.add_argument("--run-id", "--run_id", dest="run_id", default=None,
-                        help="Optional run_id to tag outputs.")
-    parser.add_argument("--write-after-each-page", "--write_after_each_page",
-                        dest="write_after_each_page", type=str2bool, default=True,
-                        help="If supported, write incremental JSON after each page.")
+    # output_dir is optional
+    parser.add_argument("--output-dir", "--output_dir",
+                        dest="output_dir", required=False, default=None,
+                        help="Optional output folder override.")
 
-    # you can add more flags here if your function accepts them, e.g. min/max chunk
-    parser.add_argument("--min-chunk", "--min_chunk", dest="min_chunk", type=int, default=None)
-    parser.add_argument("--max-chunk", "--max_chunk", dest="max_chunk", type=int, default=None)
+    # whatever flags you already use — examples:
+    parser.add_argument("--attach-bboxes", "--attach_bboxes",
+                        dest="attach_bboxes", action="store_true",
+                        help="Attach Paddle bboxes (leave off to skip).")
+    parser.add_argument("--recursive", action="store_true", default=True)
 
     args = parser.parse_args()
 
-    # normalize basic path-like args to strings (most fns accept str fine)
-    args.input_dir  = str(Path(args.input_dir))
-    args.output_dir = str(Path(args.output_dir))
+    # normalize paths
+    args.input_path = str(Path(args.input_path))
+    if args.output_dir:
+        args.output_dir = str(Path(args.output_dir))
 
-    # import the function from this file's namespace
-    try:
-        fn = ocr_from_folder  # defined earlier in for_colab.py
-    except NameError as e:
-        print("ERROR: ocr_from_folder(...) is not defined in this module.", file=sys.stderr)
-        raise
+    # call your function EXACTLY with input_path=
 
-    # only pass kwargs that the function actually declares
-    sig = inspect.signature(fn)
-    all_args = vars(args)
-    call_kwargs = {k: v for k, v in all_args.items()
-                   if (v is not None) and (k in sig.parameters)}
+    if inspect.iscoroutinefunction(ocr_from_folder):
+        result = asyncio.run(ocr_from_folder(
+            input_path=args.input_path,
+            attach_bboxes=args.attach_bboxes,
+        ))
+    else:
+        result = ocr_from_folder(
+            input_path=args.input_path,
+            attach_bboxes=args.attach_bboxes,
+        )
 
-    try:
-        result = fn(**call_kwargs)
-        # pretty-print if the function returns something JSONable
-        try:
-            print(json.dumps(result, ensure_ascii=False, indent=2))
-        except Exception:
-            print(result if result is not None else "Done.")
-    except Exception as exc:
-        print("ERROR during ocr_from_folder(...):", exc, file=sys.stderr)
-        raise
-# ============================================================================
+    print(result if result is not None else "Done.")
+
