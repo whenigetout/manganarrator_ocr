@@ -2,7 +2,7 @@ import torch
 import time
 from pathlib import Path
 from PIL import Image
-from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration, BitsAndBytesConfig, Qwen3VLForConditionalGeneration
 from typing import List, Dict, Optional, Union
 
 from app.utils import Timer
@@ -11,8 +11,11 @@ import os, importlib.util, torch
 
 def _flash_attn_available() -> bool:
     try:
-        return importlib.util.find_spec("flash_attn") is not None
-    except Exception:
+        # return importlib.util.find_spec("flash_attn") is not None
+        import flash_attn
+        return True
+    except Exception as e:
+        print("❌ flash_attn import failed:", repr(e))
         return False
 
 def _pick_attn_impl(use_flash_flag: bool) -> str:
@@ -30,6 +33,13 @@ class QwenOCRBackend:
 
         self.use_flash_attn = config.get("use_flash_attn", True)
         self.prompt = config.get("prompt", self.default_prompt())
+
+        try:
+            self.custom_cache_dir = None
+            path = Path(config["custom_cache_dir"]).resolve()
+            self.custom_cache_dir = str(path)
+        except:
+            print("❌ Failed to load custom_cache_dir, proceeding with default cache")
 
         self._load_model()
 
@@ -49,21 +59,32 @@ class QwenOCRBackend:
             )
 
         with Timer("⚙️ Load model"):
+            self.bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.float16,
+                llm_int8_enable_fp32_cpu_offload=True
+            )
+
             if flash_ok:
                 # === FLASH PATH: keep your existing behavior here (unchanged) ===
                 # If your original code had any extra kwargs, keep them.
-                self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                print(f"Flash attn available, loading with flash attn.")
+                if self.custom_cache_dir:
+                    print(f"Loading model from custom cache directory...")
+                self.model = Qwen3VLForConditionalGeneration.from_pretrained(
                                 self.model_id,
+                                cache_dir=self.custom_cache_dir,
                                 trust_remote_code=True,
-                                torch_dtype=torch.bfloat16 if flash_ok else torch.float16,
+                                quantization_config=self.bnb_config,
                                 attn_implementation="flash_attention_2",
-                                device_map="auto"
+                                device_map="cuda:0"
                             )
             else:
                 # === NON-FLASH PATH: force a non-flash backend so config is respected ===
+                print("Flash attn NOT AVAILABLE")
                 non_flash_impl = "sdpa" if has_cuda else "eager"
                 try:
-                    self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                    self.model = Qwen3VLForConditionalGeneration.from_pretrained(
                         self.model_id,
                         trust_remote_code=True,
                         torch_dtype=torch.bfloat16 if flash_ok else torch.float16,
