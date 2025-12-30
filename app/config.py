@@ -1,8 +1,8 @@
 import yaml
 from pathlib import Path
 
-def load_config(config_path: str) -> dict:
-    config_path = Path(config_path).resolve()
+def load_config(input_config_path: str) -> dict:
+    config_path = Path(input_config_path).resolve()
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found at: {config_path}")
     

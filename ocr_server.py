@@ -2,7 +2,7 @@ from fastapi import FastAPI, UploadFile, File, Form, Query
 from fastapi.responses import JSONResponse
 from pathlib import Path
 from app.ocr_runner import OCRProcessor
-from typing import Optional
+from typing import Optional, Any
 import tempfile
 import shutil
 import uuid
@@ -40,10 +40,10 @@ async def ocr_single_image(
             folder_id = f"api_image_{timestamp}_{uuid.uuid4().hex[:8]}"
             uploads_dir = Path(processor.input_folder) / "uploads" / folder_id
             uploads_dir.mkdir(parents=True, exist_ok=True)
-            image_path = uploads_dir / file.filename
+            image_path = uploads_dir / str(file.filename)
         else:
             temp_dir = Path(tempfile.mkdtemp())
-            image_path = temp_dir / file.filename
+            image_path = temp_dir / str(file.filename)
 
         with open(image_path, "wb") as f:
             f.write(await file.read())
@@ -53,7 +53,11 @@ async def ocr_single_image(
         if not should_save:
             shutil.rmtree(temp_dir)
         else:
-            processor.save_output([result], run_name=folder_id)
+            grouped = {
+                ".": [result]   # or "" if you prefer
+            }
+            processor.save_output(grouped, run_name=folder_id)
+
 
         return JSONResponse(content=result)
 
@@ -81,7 +85,7 @@ async def ocr_from_folder(
         if not folder_path.exists() or not folder_path.is_dir():
             return JSONResponse(status_code=400, content={"error": "Invalid folder path"})
         
-        config_input_root = Path(processor.config.get("input_root_folder")).resolve()
+        config_input_root = Path(str(processor.config.get("input_root_folder"))).resolve()
         if not config_input_root.exists() or not config_input_root.is_dir():
             return JSONResponse(status_code=400, content={"error": "Invalid input-root-folder path in config"})
         input_folder_rel_path_from_input_root = folder_path.relative_to(config_input_root)
@@ -133,9 +137,12 @@ async def ocr_from_folder(
 
                 # Optionally render annotated image(s) right next to the JSON ---
                 if annotate_bboxes:
-                    image_root = Path(processor.config.get("input_root_folder")).resolve()
+                    image_root = Path(str(processor.config.get("input_root_folder"))).resolve()
                     out_dir_for_images = final_json_path.parent
-                    items = paddle_data if isinstance(paddle_data, list) else [paddle_data]
+                    if isinstance(paddle_data, list):
+                        items: list[dict[str, Any]] = paddle_data
+                    else:
+                        items = [paddle_data]
                     saved_imgs = bbox_mapper.annotate_batch(items, image_root=image_root, out_dir=out_dir_for_images)
                     for p in saved_imgs:
                         print(f"🖼️ Annotated image saved: {p}")

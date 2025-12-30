@@ -1,7 +1,7 @@
 # app/utils/paddle_bbox_mapper.py
 from __future__ import annotations
 import re
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Sequence
 # --- add these imports near the top of the file ---
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
@@ -114,7 +114,7 @@ class PaddleBBoxMapper:
                         break
                     j += 1
 
-                if matched:
+                if matched and matched_start is not None and matched_end is not None:
                     # reserve span
                     for k in range(matched_start, matched_end + 1):
                         claimed.add(k)
@@ -250,7 +250,7 @@ class PaddleBBoxMapper:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         img.save(out_path, quality=95)
 
-    def annotate_batch(self, items: List[Dict[str, Any]], image_root: Path, out_dir: Path) -> list[Path]:
+    def annotate_batch(self, items: Sequence[Dict[str, Any]], image_root: Path, out_dir: Path) -> list[Path]:
         """
         For each item, resolve its image path, draw dialogue bboxes, and save as
         <image_stem>_annotated.<ext> into out_dir. Returns list of saved paths.

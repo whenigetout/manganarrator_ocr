@@ -18,7 +18,7 @@ def natural_key(s):
 
 class OCRProcessor:
     def __init__(self, config_path: Union[str, Path]):
-        self.config = load_config(config_path)
+        self.config = load_config(str(config_path))
 
         self.input_folder = Path(self.config["input_root_folder"]).resolve()
         self.output_base = Path(self.config["output_root_folder"]).resolve()
@@ -63,7 +63,7 @@ class OCRProcessor:
                         "image_height": height,
                     }
                 else:
-                    result = self.backend.infer_image(img_path, prompt=prompt)
+                    result = self.backend.infer_image(img_path, prompt=prompt) if self.backend else None
 
 
             base = base_folder or self.input_folder
@@ -72,7 +72,7 @@ class OCRProcessor:
             except ValueError:
                 image_file_name = img_path.name  # fallback if outside base path
 
-            text = result.get("text", "")
+            text = result.get("text", "") if result else ""
             parsed = parse_dialogue(text, image_id, image_file_name, str(input_folder_rel_path_from_input_root)) if isinstance(text, str) else []
 
             return {

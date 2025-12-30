@@ -4,6 +4,7 @@ from pathlib import Path
 from PIL import Image
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration, BitsAndBytesConfig, Qwen3VLForConditionalGeneration
 from typing import List, Dict, Optional, Union
+from app.models.domain import MediaRef
 
 from app.utils import Timer
 from qwen_vl_utils import process_vision_info
@@ -94,7 +95,7 @@ class QwenOCRBackend:
                 except TypeError:
                     pass
 
-    def infer_image(self, img_path: Path, prompt: Optional[str] = None) -> str:
+    def infer_image(self, img_path: Path, prompt: Optional[str] = None) -> dict:
         image = Image.open(img_path).convert("RGB")
 
         messages = [{
@@ -106,7 +107,7 @@ class QwenOCRBackend:
         }]
 
         text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        image_inputs, video_inputs = process_vision_info(messages)
+        image_inputs, video_inputs, discard_this = process_vision_info(messages)
 
         inputs = self.processor(
             text=[text],
