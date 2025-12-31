@@ -1,34 +1,50 @@
-import argparse
+from pathlib import Path
+import os
 from app.ocr_runner import OCRProcessor
+from app.special_utils.paddle_bbox_mapper import PaddleBBoxMapper
+
+# ===============================
+# 🔧 DEBUG TOGGLES (EDIT HERE)
+# ===============================
+MOCK_MODE = True          # ← flip True / False
+CONFIG_PATH = Path(__file__).parent / "config.yaml"
+# ===============================
+
+from ocr_server import mapPaddleBBoxes, save_checkpoint
+import app.models.domain_states as ds
+
+def test_paddle_mapping():
+    # 
+    processor = OCRProcessor(str(CONFIG_PATH))
+    bbox_mapper = PaddleBBoxMapper(debug=False)
+
+    new_json_path = str("/mnt/e/pcc_shared/manga_narrator_runs/outputs/api_batch_20251231_084959_5e8297b0/test_mangas/test_manga1/ocr_output_with_paddle.json").strip()
+    # ---------------------------------------------------
+    #  STEP 3: Attach Paddle B-Boxes to Qwen OCR Dialogues (new robust mapper)
+    # ---------------------------------------------------
+    paddle_augmented_ocrrun = mapPaddleBBoxes(
+        new_json_path, 
+        bbox_mapper=bbox_mapper,
+        annotate_bboxes=True 
+    )
+
+    # VALIDATE before saving
+    try:
+        paddle_ready_ocr = ds.require_paddle_ready_ocrrun(paddle_augmented_ocrrun)
+    except Exception as e:
+        save_checkpoint(paddle_augmented_ocrrun, error=str(e))
+        raise
 
 def main():
-    parser = argparse.ArgumentParser(description="MangaNarrator OCR Processor")
-    parser.add_argument(
-        "--config",
-        type=str,
-        required=True,
-        help="Path to YAML config file"
-    )
-    args = parser.parse_args()
+    if MOCK_MODE:
+        os.environ["MOCK_OCR"] = "1"
+    else:
+        os.environ.pop("MOCK_OCR", None)
 
-    print(f"\n📖 Loading config: {args.config}")
-    processor = OCRProcessor(args.config)
+    print(f"📖 Config: {CONFIG_PATH}")
+    print(f"🧪 Mock mode: {'ON' if MOCK_MODE else 'OFF'}")
 
-    prompt = '''The following is a manhwa panel.
-Extract the dialogue lines and output them in the following format:
-[SPEAKER | GENDER | EMOTION | BBOX_2D]: "TEXT"
-SPEAKER = "Speaker 1", "Speaker 2", "Narrator", etc.
-GENDER = "male", "female", or "unknown"
-EMOTION = Pick from: neutral, happy, sad, angry, excited, nervous, aroused, scared, curious, playful, serious, calm
-BBOX_2D = Outline coordinates of the dialogue line
-
-Preserve the original order. Output only the formatted lines.
-'''
-
-    print(f"\n📁 Starting batch OCR for folder: {processor.input_folder}")
-    results = processor.process_batch(processor.input_folder, '', prompt=prompt)
-
-    processor.save_output(results)
+    test_paddle_mapping()
 
 if __name__ == "__main__":
     main()

@@ -1,4 +1,5 @@
-from fastapi import FastAPI, UploadFile, File, Form, Query
+from fastapi import FastAPI, UploadFile, File, Form, Query, Request
+from contextlib import asynccontextmanager
 from fastapi.responses import JSONResponse
 from pathlib import Path
 from app.ocr_runner import OCRProcessor
@@ -17,7 +18,22 @@ from app.models.domain import OCRRunError, MediaRef, PaddleAugmentedOCRRunRespon
 import app.models.domain_states as ds
 from app.utils import save_model_json
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Context Manager for application lifespan.
+    Code before 'yield' runs on startup.
+    Code after 'yield' runs on shutdown.
+    """
+    # print("Application startup: Initializing resources...")
+    app.state.processor = OCRProcessor("config.yaml")
+    app.state.bbox_mapper = PaddleBBoxMapper(debug=False) # debug off so that it's not noisy in the terminal
+    yield  # The application starts serving requests here
+    # print("Application shutdown: Cleaning up resources...")
+    # # Clean up resources
+    # print("Resources cleaned up.")
+
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # or ["http://localhost:3000"]
@@ -25,8 +41,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-processor = OCRProcessor("config.yaml")
-bbox_mapper = PaddleBBoxMapper(debug=False)  # turn off debug in prod if noisy
 
 def save_checkpoint(ocrrun: OCRRunResponse | PaddleAugmentedOCRRunResponse, error: str):
     '''
@@ -52,7 +66,11 @@ def ocr_image_to_bbox_item(img: PaddleOCRImage) -> dict:
         "paddleocr_result": img.paddleocr_result,
     }
 
-def annotatePaddleBBoxes(paddle_augmented_ocrrun: PaddleAugmentedOCRRunResponse, final_json_path: Path):
+def annotatePaddleBBoxes(
+        paddle_augmented_ocrrun: PaddleAugmentedOCRRunResponse, 
+        final_json_path: Path,
+        processor: OCRProcessor,
+        bbox_mapper: PaddleBBoxMapper):
     image_root = Path(
                 str(processor.config.get("input_root_folder"))
             ).resolve()
@@ -91,7 +109,11 @@ def annotatePaddleBBoxes(paddle_augmented_ocrrun: PaddleAugmentedOCRRunResponse,
     for p in saved_imgs:
         print(f"🖼️ Annotated image saved: {p}")
 
-def mapPaddleBBoxes(new_json_path: str, annotate_bboxes: bool = False):
+def mapPaddleBBoxes(
+        new_json_path: str, 
+        bbox_mapper: PaddleBBoxMapper,
+        annotate_bboxes: bool = False,
+        ):
     with open(new_json_path, "r", encoding="utf-8") as f:
         raw = json.load(f)
 
@@ -143,6 +165,7 @@ def mapPaddleBBoxes(new_json_path: str, annotate_bboxes: bool = False):
 
 @app.post("/ocr/folder")
 async def ocr_from_folder(
+    request: Request,
     input_path: str = Form(
         ..., 
         description="Relative path under media_root/inputs/, e.g. test_mangas/test_manga1"
@@ -161,6 +184,9 @@ async def ocr_from_folder(
             namespace='inputs',
             path=input_path
         )
+
+        processor = request.app.state.processor
+        bbox_mapper = request.app.state.bbox_mapper
 
         folder_path = Path(processor.media_root) / folderRef.namespace / folderRef.path
         if not folder_path.exists() or not folder_path.is_dir():
@@ -218,6 +244,7 @@ async def ocr_from_folder(
                 # ---------------------------------------------------
                 paddle_augmented_ocrrun = mapPaddleBBoxes(
                     new_json_path, 
+                    bbox_mapper=bbox_mapper,
                     annotate_bboxes=annotate_bboxes if annotate_bboxes else False
                 )
 
@@ -241,7 +268,9 @@ async def ocr_from_folder(
                 if annotate_bboxes:
                     annotatePaddleBBoxes(
                         paddle_augmented_ocrrun=paddle_augmented_ocrrun,
-                        final_json_path=final_json_path
+                        final_json_path=final_json_path,
+                        processor=processor,
+                        bbox_mapper=bbox_mapper
                     )
         # ---------------------------------------------------
 
@@ -261,9 +290,11 @@ async def ocr_from_folder(
 
 @app.get("/ocr/results")
 async def get_ocr_results(
+    request: Request,
     run_id: str = Query(..., description="The run ID of the OCR batch"),
 ):
     try:
+        processor = request.app.state.processor
         base_path = Path(processor.media_root) / "outputs" / run_id
         if not base_path.exists():
             return JSONResponse(status_code=404, content={"error": "Run ID not found"})
@@ -302,6 +333,7 @@ async def get_ocr_results(
 
 @app.post("/debug/map_paddle_bboxes")
 async def debug_map_paddle_bboxes(
+    request: Request,
     json_path: str = Form(
         ...,
         description="Path to *_with_paddle.json or paddle-augmented OCR JSON"
@@ -316,6 +348,7 @@ async def debug_map_paddle_bboxes(
     Calls the existing function directly. No duplicated logic.
     """
     try:
+        bbox_mapper = request.app.state.bbox_mapper
         json_path_ = Path(json_path).resolve()
         if not json_path_.exists():
             return JSONResponse(
@@ -326,6 +359,7 @@ async def debug_map_paddle_bboxes(
         # 🔑 reuse existing logic — single source of truth
         mapPaddleBBoxes(
             new_json_path=str(json_path_),
+            bbox_mapper=bbox_mapper,
             annotate_bboxes=annotate_bboxes
         )
 

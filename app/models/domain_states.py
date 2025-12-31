@@ -1,5 +1,5 @@
 # domain_states.py
-import domain as d
+import app.models.domain as d
 from typing import cast
 
 def require_images(run: d.OCRRunResponse) -> list[d.OCRImage]:
@@ -35,7 +35,7 @@ def require_paddle_ready_ocrrun(run: d.PaddleAugmentedOCRRunResponse):
         if not img.parsedDialogueLines or not isinstance(img.parsedDialogueLines[0], d.PaddleDialogueLineResponse):
             raise d.PaddleAugmentationError("Paddle Augmentation failed, no dialogue lines found")
         for dlg in img.parsedDialogueLines:
-            if not dlg.paddlebbox or not isinstance(dlg.paddlebbox, d.PaddleBBox) or not dlg.paddlebbox.poly or not dlg.paddlebbox.matched_rec_text_index or not dlg.paddlebbox.matched_rec_text_index_orig:
+            if not dlg.paddlebbox or not isinstance(dlg.paddlebbox, d.PaddleBBox) or not dlg.paddlebbox.poly or not isinstance(dlg.paddlebbox.matched_rec_text_index, int) or not isinstance(dlg.paddlebbox.matched_rec_text_index_orig, int):
                 raise d.PaddleAugmentationError("Paddle Augmentation failed, invalid bbox")
             
     return cast(PaddleReadyOCRRun, run)
