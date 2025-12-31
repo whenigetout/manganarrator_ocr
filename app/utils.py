@@ -2,13 +2,17 @@ import os
 import json
 import time
 import re
-from typing import List, Dict
+from typing import List, Union
 from pathlib import Path
 import shutil
+import json
+
 # For rich spinner/loading spinner in console
 from rich.console import Console
 from PIL import Image
 from app.models.domain import DialogueLineResponse, ParseDialogueError, MediaRef
+
+from pydantic import BaseModel
 
 import traceback
 
@@ -271,3 +275,31 @@ def preprocess_and_split_tall_images(folderRef: MediaRef, media_root: str, max_c
         # Optionally, remove split prefix files (they were just renamed)
 
     print("[Preprocessing] Done splitting tall images.\n")
+
+def save_model_json(
+    model: BaseModel,
+    json_path: Union[str, Path],
+    *,
+    indent: int = 2,
+    ensure_ascii: bool = False,
+) -> Path:
+    """
+    Save any Pydantic model to a JSON file.
+
+    - Accepts str or Path
+    - Creates parent directories if needed
+    - Uses Pydantic v2 model_dump()
+    - Returns the resolved output Path
+    """
+    path = Path(json_path).resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(
+            model.model_dump(),
+            f,
+            indent=indent,
+            ensure_ascii=ensure_ascii,
+        )
+
+    return path

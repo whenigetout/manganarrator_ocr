@@ -15,6 +15,7 @@ import httpx
 from app.special_utils.paddle_bbox_mapper import PaddleBBoxMapper
 from app.models.domain import OCRRunError, MediaRef, PaddleAugmentedOCRRunResponse, PaddleOCRImage, OCRRunResponse
 import app.models.domain_states as ds
+from app.utils import save_model_json
 
 app = FastAPI()
 app.add_middleware(
@@ -27,7 +28,7 @@ app.add_middleware(
 processor = OCRProcessor("config.yaml")
 bbox_mapper = PaddleBBoxMapper(debug=False)  # turn off debug in prod if noisy
 
-def save_checkpoint(ocrrun: OCRRunResponse, error: str):
+def save_checkpoint(ocrrun: OCRRunResponse | PaddleAugmentedOCRRunResponse, error: str):
     '''
     Placeholder for a "save checkpoint" fn which allows RESUMING a batch after failure
     '''
@@ -51,62 +52,53 @@ def ocr_image_to_bbox_item(img: PaddleOCRImage) -> dict:
         "paddleocr_result": img.paddleocr_result,
     }
 
+def annotatePaddleBBoxes(paddle_augmented_ocrrun: PaddleAugmentedOCRRunResponse, final_json_path: Path):
+    image_root = Path(
+                str(processor.config.get("input_root_folder"))
+            ).resolve()
+    out_dir_for_images = final_json_path.parent
+
+    annotation_items = []
+
+    for img in paddle_augmented_ocrrun.imageResults or []:
+        if not img.parsedDialogueLines or not img.inferImageRes or not img.inferImageRes.image_ref:
+            continue
+
+        imgRef = img.inferImageRes.image_ref
+        img_file_name = Path(imgRef.path).name
+        image_rel_path_from_root = str(Path(img.inferImageRes.image_ref.path).parent)
+
+        annotation_items.append({
+            "image_file_name": img_file_name,  # IMPORTANT: must match actual filename
+            "image_rel_path_from_root": image_rel_path_from_root,    # OK if image_root already points correctly
+            "parsed_dialogue": [
+                {
+                    "id": dlg.id,
+                    "paddle_bbox": dlg.paddlebbox.model_dump()
+                    if dlg.paddlebbox else None,
+                }
+                for dlg in img.parsedDialogueLines
+                if dlg.paddlebbox
+            ],
+        })
+
+    saved_imgs = bbox_mapper.annotate_batch(
+        annotation_items,
+        image_root=image_root,
+        out_dir=out_dir_for_images,
+    )
+
+    for p in saved_imgs:
+        print(f"🖼️ Annotated image saved: {p}")
 
 def mapPaddleBBoxes(new_json_path: str, annotate_bboxes: bool = False):
     with open(new_json_path, "r", encoding="utf-8") as f:
         raw = json.load(f)
 
         ocr_run = PaddleAugmentedOCRRunResponse.model_validate(raw)
-        paddle_data = bbox_mapper.map_and_save_paddle_bboxes(ocr_run, Path(new_json_path))
+        paddle_augmented_ocrrun = bbox_mapper.map_and_save_paddle_bboxes(ocr_run, Path(new_json_path))
 
-        # Map in-place; prints per-dialogue debug if bbox_mapper.debug = True
-        # paddle_data = bbox_mapper.map_batch(paddle_data if isinstance(paddle_data, list) else [paddle_data])
-
-        # Save final JSON with bboxes (same path pattern as before)
-        final_json_path = Path(new_json_path).parent / "ocr_output_with_bboxes.json"
-        with open(final_json_path, "w", encoding="utf-8") as f:
-            json.dump(paddle_data.model_dump(), f, indent=2, ensure_ascii=False)
-        print(f"✅ Final JSON with bboxes saved: {final_json_path}")
-
-        # Optionally render annotated image(s) right next to the JSON ---
-        if annotate_bboxes:
-            image_root = Path(
-                str(processor.config.get("input_root_folder"))
-            ).resolve()
-            out_dir_for_images = final_json_path.parent
-
-            annotation_items = []
-
-            for img in paddle_data.imageResults or []:
-                if not img.parsedDialogueLines or not img.inferImageRes or not img.inferImageRes.image_ref:
-                    continue
-
-                imgRef = img.inferImageRes.image_ref
-                img_file_name = Path(imgRef.path).name
-                image_rel_path_from_root = str(Path(img.inferImageRes.image_ref.path).parent)
-
-                annotation_items.append({
-                    "image_file_name": img_file_name,  # IMPORTANT: must match actual filename
-                    "image_rel_path_from_root": image_rel_path_from_root,    # OK if image_root already points correctly
-                    "parsed_dialogue": [
-                        {
-                            "id": dlg.id,
-                            "paddle_bbox": dlg.paddlebbox.model_dump()
-                            if dlg.paddlebbox else None,
-                        }
-                        for dlg in img.parsedDialogueLines
-                        if dlg.paddlebbox
-                    ],
-                })
-
-            saved_imgs = bbox_mapper.annotate_batch(
-                annotation_items,
-                image_root=image_root,
-                out_dir=out_dir_for_images,
-            )
-
-            for p in saved_imgs:
-                print(f"🖼️ Annotated image saved: {p}")
+        return paddle_augmented_ocrrun
 
 # ---------------------------------------------------
 
@@ -198,7 +190,6 @@ async def ocr_from_folder(
             for img in images:
                 inferred = ds.require_inferred(img)
                 parsed = ds.require_parsed(inferred)
-                paddle = ds.require_paddle(parsed)
 
         except Exception as e:
             save_checkpoint(ocrrun, error=str(e))
@@ -225,7 +216,33 @@ async def ocr_from_folder(
                 # ---------------------------------------------------
                 #  STEP 3: Attach Paddle B-Boxes to Qwen OCR Dialogues (new robust mapper)
                 # ---------------------------------------------------
-                mapPaddleBBoxes(new_json_path, annotate_bboxes=annotate_bboxes if annotate_bboxes else False)
+                paddle_augmented_ocrrun = mapPaddleBBoxes(
+                    new_json_path, 
+                    annotate_bboxes=annotate_bboxes if annotate_bboxes else False
+                )
+
+                # VALIDATE before saving
+                try:
+                    paddle_ready_ocr = ds.require_paddle_ready_ocrrun(paddle_augmented_ocrrun)
+                except Exception as e:
+                    save_checkpoint(paddle_augmented_ocrrun, error=str(e))
+                    raise
+
+                # Save final JSON with bboxes (same path pattern as before)
+                final_json_path = Path(new_json_path).parent / "ocr_output_with_bboxes.json"
+
+                json_with_bboxes_attached = save_model_json(
+                    model=paddle_augmented_ocrrun,
+                    json_path=final_json_path
+                )
+                print(f"✅ Final JSON with bboxes saved: {final_json_path}")
+
+                # Optionally render annotated image(s) right next to the JSON ---
+                if annotate_bboxes:
+                    annotatePaddleBBoxes(
+                        paddle_augmented_ocrrun=paddle_augmented_ocrrun,
+                        final_json_path=final_json_path
+                    )
         # ---------------------------------------------------
 
         response = {

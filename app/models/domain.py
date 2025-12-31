@@ -75,5 +75,8 @@ class OCRRunError(ProcessImageError):
 class ParseDialogueError(Exception):
     pass
 
+class PaddleAugmentationError(Exception):
+    pass
+
 class SaveJSONError(Exception):
     pass

@@ -6,7 +6,7 @@ from .backends.qwen_backend import QwenOCRBackend
 import uuid
 import json
 from datetime import datetime
-from app.utils import parse_dialogue
+from app.utils import parse_dialogue, save_model_json
 import re
 import os
 from collections import defaultdict
@@ -148,8 +148,12 @@ class OCRProcessor:
             out_dir.mkdir(parents=True, exist_ok=True)
 
             out_file = out_dir / "ocr_output.json"
-            with open(out_file, "w", encoding="utf-8") as f:
-                json.dump(ocr_run.model_dump(), f, indent=2, ensure_ascii=False)
+
+            save_model_json(
+                model=ocr_run,
+                json_path=out_file
+            )
+
             media_outputs_Path = Path(self.media_root) / 'outputs'
             out_file_ref = MediaRef(
                 namespace="outputs",
