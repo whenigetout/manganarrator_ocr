@@ -4,7 +4,7 @@ from pathlib import Path
 from PIL import Image
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration, BitsAndBytesConfig, Qwen3VLForConditionalGeneration
 from typing import List, Dict, Optional, Union
-from app.models.domain import MediaRef
+from app.models.domain import MediaRef, InferImageResponse, InferImageError
 
 from app.utils import Timer
 from qwen_vl_utils import process_vision_info
@@ -41,11 +41,18 @@ class QwenOCRBackend:
             self.custom_cache_dir = str(path)
         except:
             print("❌ Failed to load custom_cache_dir, proceeding with default cache")
+        
+        try:
+            self.media_root: str = ""
+            path = Path(config["media_root"]).resolve()
+            self.media_root = str(path)
+        except:
+            raise ValueError("❌ Failed to load media_root path from config")
 
         self._load_model()
 
-    def _load_model(self):
-        print(f"\n📦 Loading Qwen2.5-VL model: {self.model_id}")
+    def _load_model(self) -> None:
+        print(f"\n📦 Loading model: {self.model_id}")
         use_flash_flag = bool(self.use_flash_attn)
         has_cuda = torch.cuda.is_available()
         flash_ok = use_flash_flag and has_cuda and _flash_attn_available()
@@ -95,47 +102,55 @@ class QwenOCRBackend:
                 except TypeError:
                     pass
 
-    def infer_image(self, img_path: Path, prompt: Optional[str] = None) -> dict:
-        image = Image.open(img_path).convert("RGB")
+    def infer_image(self, img: MediaRef, prompt: Optional[str] = None) -> InferImageResponse:
+        try:
+            img_path = Path(self.media_root) / img.namespace / img.path
+            image = Image.open(img_path).convert("RGB")
+            width, height = image.size
 
-        messages = [{
-            "role": "user",
-            "content": [
-                {"type": "image", "image": image},
-                {"type": "text", "text": self.prompt if prompt is None else prompt}
-            ]
-        }]
+            messages = [{
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": self.prompt if prompt is None else prompt}
+                ]
+            }]
 
-        text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        image_inputs, video_inputs, discard_this = process_vision_info(messages)
+            text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            image_inputs, video_inputs, *_discard_this = process_vision_info(messages)
 
-        inputs = self.processor(
-            text=[text],
-            images=image_inputs,
-            videos=video_inputs,
-            padding=True,
-            return_tensors="pt"
-        )
+            inputs = self.processor(
+                text=[text],
+                images=image_inputs,
+                videos=video_inputs,
+                padding=True,
+                return_tensors="pt"
+            )
 
-        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-        input_tokens = inputs["input_ids"].shape[-1]
+            inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+            input_tokens = inputs["input_ids"].shape[-1]
 
-        with Timer("🚀 Inference", use_spinner=False):
-            with torch.inference_mode():
-                generated_ids = self.model.generate(**inputs, max_new_tokens=512)
+            with Timer("🚀 Inference", use_spinner=False):
+                with torch.inference_mode():
+                    generated_ids = self.model.generate(**inputs, max_new_tokens=512)
 
-        trimmed_ids = [out[len(inp):] for inp, out in zip(inputs["input_ids"], generated_ids)]
-        output_tokens = trimmed_ids[0].shape[-1]
-        outputs = self.processor.batch_decode(trimmed_ids, skip_special_tokens=True)
+            trimmed_ids = [out[len(inp):] for inp, out in zip(inputs["input_ids"], generated_ids)]
+            output_tokens = trimmed_ids[0].shape[-1]
+            outputs = self.processor.batch_decode(trimmed_ids, skip_special_tokens=True)
 
-        return {
-            "text": outputs[0],
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "throughput": round((input_tokens + output_tokens) / (Timer.last_duration or 1e-5), 2)
-        }
+            return InferImageResponse(
+                image_ref=img,
+                image_text=outputs[0],
+                image_width=width,
+                image_height=height,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                throughput=round((input_tokens + output_tokens) / (Timer.last_duration or 1e-5), 2)
+            )
+        except Exception as e:
+            raise InferImageError(f"Failed to infer image") from e
 
-    def default_prompt(self):
+    def default_prompt(self) -> str:
         return '''The following is a manhwa panel.
 Extract the dialogue lines and output them in the following format:
 [SPEAKER | GENDER | EMOTION]: "TEXT"

@@ -2,8 +2,8 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python: FastAPI (paddleocr_server)",
-            "type": "python",
+            "name": "Python: FastAPI (manganarrator_server)",
+            "type": "debugpy",
             "request": "launch",
             "module": "uvicorn",
             "args": [
@@ -19,6 +19,27 @@
             "console": "integratedTerminal",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Python: FastAPI (manganarrator_server) [MOCK]",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "ocr_server:app",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "7860",
+                "--reload"
+            ],
+            "jinja": true,
+            "justMyCode": false,
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}",
+                "MOCK_OCR": "1"
             }
         }
     ]

@@ -5,6 +5,11 @@ from typing import List, Dict, Any, Optional, Sequence
 # --- add these imports near the top of the file ---
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
+from app.models.domain import (
+    PaddleAugmentedOCRRunResponse,
+    PaddleDialogueLineResponse,
+    PaddleBBox
+    )
 
 class PaddleBBoxMapper:
     """
@@ -270,3 +275,63 @@ class PaddleBBoxMapper:
                 if self.debug:
                     print(f"[DRAW-ERR] {image_path}: {e}")
         return saved
+
+
+    def map_and_save_paddle_bboxes(
+        self,
+        run: PaddleAugmentedOCRRunResponse,
+        out_json_path: Path,
+        # mapper: PaddleBBoxMapper,
+    ) -> PaddleAugmentedOCRRunResponse:
+        """
+        Maps paddle bboxes onto dialogue lines WITHOUT changing JSON structure.
+        Reuses existing PaddleBBoxMapper.map_image_item().
+        Saves output using the same filename passed in (caller controls naming).
+        """
+
+        if not run.imageResults:
+            out_json_path.write_text(run.model_dump_json(indent=2), encoding="utf-8")
+            return run
+
+        for image in run.imageResults:
+            if not image.parsedDialogueLines or not image.paddleocr_result:
+                continue
+
+            # --- build legacy dict shape expected by map_image_item ---
+            item_dict: dict[str, Any] = {
+                "parsed_dialogue": [
+                    {
+                        "id": dlg.id,
+                        "text": dlg.text,
+                    }
+                    for dlg in image.parsedDialogueLines
+                ],
+                "paddleocr_result": image.paddleocr_result,
+            }
+
+            # --- run existing logic (IN PLACE on dict) ---
+            self.map_image_item(item_dict)
+
+            # --- copy ONLY paddlebbox back into models ---
+            bbox_by_id = {
+                d["id"]: d.get("paddle_bbox")
+                for d in item_dict["parsed_dialogue"]
+            }
+
+            for i, dlg in enumerate(image.parsedDialogueLines):
+                # image.parsedDialogueLines[i] = PaddleDialogueLineResponse(
+                #     **dlg.model_dump(),
+                #     paddlebbox=bbox_by_id.get(dlg.id),
+                # )
+                bbox_dict = bbox_by_id.get(dlg.id)
+                dlg.paddlebbox = PaddleBBox.model_validate(bbox_dict) if bbox_dict else None
+
+        # --- save without structural mutation ---
+        # out_json_path.parent.mkdir(parents=True, exist_ok=True)
+        # final_json_path = Path(out_json_path).parent / "ocr_output_with_bboxes.json"
+        # out_json_path.write_text(
+        #     run.model_dump_json(indent=2),
+        #     encoding="utf-8",
+        # )
+
+        return run

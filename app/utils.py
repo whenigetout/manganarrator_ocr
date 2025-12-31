@@ -8,6 +8,7 @@ import shutil
 # For rich spinner/loading spinner in console
 from rich.console import Console
 from PIL import Image
+from app.models.domain import DialogueLineResponse, ParseDialogueError, MediaRef
 
 import traceback
 
@@ -54,7 +55,7 @@ class Timer:
 
     def _live_counter(self):
         while not self._stop_event.is_set():
-            elapsed = int(time.perf_counter() - self.start_time)
+            elapsed = int(time.perf_counter()) - int(self.start_time if self.start_time else 0)
             self.console.print(
                 f"[cyan]{self.label}[/] [yellow]Elapsed: {elapsed}s[/]", end="\r"
             )
@@ -78,7 +79,7 @@ class Timer:
         self._stop_event.set()
         if self._timer_thread is not None:
             self._timer_thread.join()
-        duration = time.perf_counter() - self.start_time
+        duration = int(time.perf_counter()) - int(self.start_time if self.start_time else 0)
         Timer.last_duration = duration
 
         if self.use_spinner and self.status:
@@ -89,52 +90,55 @@ class Timer:
             )
 
 
-def parse_dialogue(text: str, image_id: str, image_file_name: str, input_folder_rel_path_from_input_root: str) -> List[Dict]:
+def parse_dialogue(text: str, image_id: str) -> List[DialogueLineResponse]:
     """
     Parses raw OCR text output into structured JSON.
     Tries strict regex first, then falls back to a more permissive format.
     """
-    dialogue = []
-    strict_pattern = re.compile(
-        r'^\s*\[(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\s*[:：]\s*["“”]?(.*?)["“”]?$',
-        re.IGNORECASE
-    )
-    loose_pattern = re.compile(
-        r'^\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*[:：]\s*["“”]?(.*?)["“”]?$',
-        re.IGNORECASE
-    )
+    try:
+        dialogueLines = []
+        strict_pattern = re.compile(
+            r'^\s*\[(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\]\s*[:：]\s*["“”]?(.*?)["“”]?$',
+            re.IGNORECASE
+        )
+        loose_pattern = re.compile(
+            r'^\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*[:：]\s*["“”]?(.*?)["“”]?$',
+            re.IGNORECASE
+        )
 
-    for i, line in enumerate(text.strip().splitlines(), start=1):
-        line = line.strip()
-        if not line:
-            continue
-
-        match = strict_pattern.match(line)
-        if match:
-            speaker, gender, emotion, content = match.groups()
-        else:
-            match = loose_pattern.match(line)
-            if match:
-                speaker, gender, emotion, content = match.groups()
-                print(f"⚠️ Loose parse used for line {i}: {line}")
-            else:
-                print(f"❌ Failed to parse line {i}: {line}")
+        for i, line in enumerate(text.strip().splitlines(), start=1):
+            line = line.strip()
+            if not line:
                 continue
 
-        dialogue.append({
-            "id": i,
-            "image_id": image_id,
-            "image_file_name": image_file_name,
-            "image_rel_path_from_root": input_folder_rel_path_from_input_root,
-            "speaker": speaker.strip(),
-            "gender": gender.strip(),
-            "emotion": emotion.strip(),
-            "text": fix_casing(content).strip()
-        })
+            match = strict_pattern.match(line)
+            if match:
+                speaker, gender, emotion, content = match.groups()
+            else:
+                match = loose_pattern.match(line)
+                if match:
+                    speaker, gender, emotion, content = match.groups()
+                    print(f"⚠️ Loose parse used for line {i}: {line}")
+                else:
+                    print(f"❌ Failed to parse line {i}: {line}")
+                    continue
 
-    if not dialogue:
-        print("⚠️ No valid dialogue lines found — check input format.")
-    return dialogue
+            dialogueLines.append(
+                DialogueLineResponse(
+                    id=i,
+                    image_id=image_id,
+                    speaker=speaker.strip(),
+                    gender=gender.strip(),
+                    emotion=emotion.strip(),
+                    text=fix_casing(content).strip()
+                )
+               )
+
+        if not dialogueLines:
+            raise ParseDialogueError("⚠️ No valid dialogue lines found — check input format.")
+        return dialogueLines
+    except Exception as e:
+        raise ParseDialogueError from e
 
 
 def clear_folders(folder_names=["input", "output"]) -> None:
@@ -230,13 +234,13 @@ def optimal_split(image_path, output_prefix, max_chunk=7000, min_chunk=4000):
 
     print(f"Done. Total splits: {len(cuts)}")
 
-def preprocess_and_split_tall_images(folder_path, max_chunk, min_chunk):
+def preprocess_and_split_tall_images(folderRef: MediaRef, media_root: str, max_chunk, min_chunk) -> None:
     """
     Scans all images in a folder. If any are taller than max_chunk, splits them using optimal_split,
     replaces originals with split images, and logs actions clearly.
     """
     exts = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
-    folder_path = Path(folder_path)
+    folder_path = Path(media_root) / folderRef.namespace / folderRef.path
     for img_file in sorted(folder_path.glob('*')):
         if not img_file.suffix.lower() in exts:
             continue
