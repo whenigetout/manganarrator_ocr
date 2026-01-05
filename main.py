@@ -18,22 +18,31 @@ def test_paddle_mapping():
     processor = OCRProcessor(str(CONFIG_PATH))
     bbox_mapper = PaddleBBoxMapper(debug=False)
 
-    new_json_path = str("/mnt/e/pcc_shared/manga_narrator_runs/outputs/api_batch_20251231_084959_5e8297b0/test_mangas/test_manga1/ocr_output_with_paddle.json").strip()
+    new_json_path = str("/mnt/e/pcc_shared/manga_narrator_runs/outputs/api_batch_20260105_071144_be083864/test/ocr_output_with_paddle.json").strip()
     # ---------------------------------------------------
     #  STEP 3: Attach Paddle B-Boxes to Qwen OCR Dialogues (new robust mapper)
     # ---------------------------------------------------
     paddle_augmented_ocrrun = mapPaddleBBoxes(
         new_json_path, 
         bbox_mapper=bbox_mapper,
-        annotate_bboxes=True 
     )
 
     # VALIDATE before saving
     try:
-        paddle_ready_ocr = ds.require_paddle_ready_ocrrun(paddle_augmented_ocrrun)
+        pass
+        # paddle_ready_ocr = ds.require_paddle_ready_ocrrun(paddle_augmented_ocrrun)
     except Exception as e:
         save_checkpoint(paddle_augmented_ocrrun, error=str(e))
         raise
+
+def test_item_mapping():
+    bbox_mapper = PaddleBBoxMapper(debug=False)
+
+    import json
+    with open("local_tmp/data.json", "r", encoding="utf-8") as f:
+        item_dict = json.load(f)
+    
+    bbox_mapper.map_image_item(item=item_dict)
 
 def main():
     if MOCK_MODE:
@@ -44,7 +53,7 @@ def main():
     print(f"📖 Config: {CONFIG_PATH}")
     print(f"🧪 Mock mode: {'ON' if MOCK_MODE else 'OFF'}")
 
-    test_paddle_mapping()
+    test_item_mapping()
 
 if __name__ == "__main__":
     main()

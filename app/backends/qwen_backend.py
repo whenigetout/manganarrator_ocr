@@ -104,7 +104,7 @@ class QwenOCRBackend:
 
     def infer_image(self, img: MediaRef, prompt: Optional[str] = None) -> InferImageResponse:
         try:
-            img_path = Path(self.media_root) / img.namespace / img.path
+            img_path = img.resolve(Path(self.media_root))
             image = Image.open(img_path).convert("RGB")
             width, height = image.size
 

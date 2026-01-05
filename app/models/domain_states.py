@@ -12,7 +12,7 @@ class InferredOCRImage(d.OCRImage):
     pass
 
 def require_inferred(img: d.OCRImage) -> InferredOCRImage:
-    if img.inferImageRes is None:
+    if img.inferImageRes is None or img.paddleResizeInfo is None:
         raise d.InferImageError("OCRImage is not inferred yet")
     return cast(InferredOCRImage, img)
 
@@ -29,6 +29,8 @@ class PaddleReadyOCRRun(d.PaddleAugmentedOCRRunResponse):
     pass
 
 def require_paddle_ready_ocrrun(run: d.PaddleAugmentedOCRRunResponse):
+    if not run.ocr_json_file:
+        raise d.PaddleAugmentationError("Paddle Augmentation failed, invalid json file path")
     if not run.imageResults or not isinstance(run.imageResults[0], d.PaddleOCRImage):
         raise d.PaddleAugmentationError("Paddle Augmentation failed, no images found")
     for img in run.imageResults:
@@ -36,7 +38,7 @@ def require_paddle_ready_ocrrun(run: d.PaddleAugmentedOCRRunResponse):
             raise d.PaddleAugmentationError("Paddle Augmentation failed, no dialogue lines found")
         for dlg in img.parsedDialogueLines:
             if not dlg.paddlebbox or not isinstance(dlg.paddlebbox, d.PaddleBBox) or not dlg.paddlebbox.poly or not isinstance(dlg.paddlebbox.matched_rec_text_index, int) or not isinstance(dlg.paddlebbox.matched_rec_text_index_orig, int):
-                raise d.PaddleAugmentationError("Paddle Augmentation failed, invalid bbox")
+                raise d.PaddleAugmentationError(f"Paddle Augmentation failed, invalid bbox for img: {img.inferImageRes.image_ref.filename if img.inferImageRes else 'invalid img name'} - dlgId: {dlg.id}")
             
     return cast(PaddleReadyOCRRun, run)
 

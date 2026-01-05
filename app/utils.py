@@ -244,7 +244,7 @@ def preprocess_and_split_tall_images(folderRef: MediaRef, media_root: str, max_c
     replaces originals with split images, and logs actions clearly.
     """
     exts = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
-    folder_path = Path(media_root) / folderRef.namespace / folderRef.path
+    folder_path = folderRef.resolve(Path(media_root))
     for img_file in sorted(folder_path.glob('*')):
         if not img_file.suffix.lower() in exts:
             continue

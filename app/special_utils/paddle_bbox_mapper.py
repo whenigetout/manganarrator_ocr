@@ -309,6 +309,16 @@ class PaddleBBoxMapper:
                 "paddleocr_result": image.paddleocr_result,
             }
 
+            # log item dict, remove this later
+            import json
+            with open("local_tmp/item_dict.json", "w", encoding="utf-8") as f:
+                json.dump(
+                    item_dict,
+                    f,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+
             # --- run existing logic (IN PLACE on dict) ---
             self.map_image_item(item_dict)
 
