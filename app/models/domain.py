@@ -111,12 +111,39 @@ class PaddleBBox(BaseModel):
     matched_rec_text_index: Optional[int] = None
     matched_rec_text_index_orig: Optional[int] = None
 
+class OriginalImageBBox(BaseModel):
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+
 class PaddleDialogueLineResponse(DialogueLineResponse):
     paddlebbox: Optional[PaddleBBox] = None
+    original_bbox: Optional[OriginalImageBBox] = None
 
 class PaddleOCRImage(OCRImage):
     parsedDialogueLines: Optional[list[PaddleDialogueLineResponse]] = None
     paddleocr_result: Optional[Any] = None
+
+    @model_validator(mode="after")
+    def attach_resize_info_to_lines(self):
+        if (
+            self.paddleResizeInfo is None
+            or not self.parsedDialogueLines
+        ):
+            return self
+
+        for line in self.parsedDialogueLines:
+            if (
+                line.paddlebbox is not None
+                and line.original_bbox is None
+            ):
+                line.original_bbox = scale_paddle_bbox_to_original(
+                    line.paddlebbox,
+                    self.paddleResizeInfo,
+                )
+
+        return self
 
 class PaddleAugmentedOCRRunResponse(OCRRunResponse):
     # path to THE json file (with bboxes)
@@ -174,22 +201,14 @@ def paddle_resize_info(
         ratio_w=ratio_w,
     )
 
-# Exceptions
-class InferImageError(Exception):
-    pass
-
-class ProcessImageError(InferImageError):
-    pass
-
-class OCRRunError(ProcessImageError):
-    pass
-
-class ParseDialogueError(Exception):
-    pass
-
-class PaddleAugmentationError(Exception):
-    pass
-
-class SaveJSONError(Exception):
-    pass
+def scale_paddle_bbox_to_original(
+    bbox: PaddleBBox,
+    resize_info: PaddleResizeInfo,
+) -> OriginalImageBBox:
+    return OriginalImageBBox(
+        x1=bbox.x1 / resize_info.ratio_w,
+        y1=bbox.y1 / resize_info.ratio_h,
+        x2=bbox.x2 / resize_info.ratio_w,
+        y2=bbox.y2 / resize_info.ratio_h,
+    )
 

@@ -25,21 +25,30 @@ class PaddleBBoxMapper:
         self,
         min_coverage: float = 0.55,
         min_chars: int = 20,
-        min_rect_norm_len: int = 2,  # filters out single glyphs like '京', '气', 'o?'
+        min_rect_norm_len: int = 1,  # filters out single glyphs like '京', '气', 'o?'
         debug: bool = False,
         debug_preview_count: int = 3,
+        LONG_DIALOGUE_THRESHOLD: int = 80  # chars after normalization
     ) -> None:
         self.min_coverage = min_coverage
         self.min_chars = min_chars
         self.min_rect_norm_len = min_rect_norm_len
         self.debug = debug
         self.debug_preview_count = debug_preview_count
+        self.LONG_DIALOGUE_THRESHOLD = LONG_DIALOGUE_THRESHOLD
 
     # ---------- helpers ----------
     @staticmethod
     def _normalize(s: str) -> str:
         """lowercase & drop all non-alphanumerics (spaces/punct go away)."""
         return re.sub(r"[^0-9a-z]+", "", s.lower())
+
+    def _has_cjk(self, s: str) -> bool:
+        return any(
+            '\u4e00' <= ch <= '\u9fff'   # CJK Unified Ideographs
+            or '\u3040' <= ch <= '\u30ff'  # Hiragana + Katakana
+            for ch in s
+        )
 
     def _sort_and_filter(self, item: Dict[str, Any]):
         rect_texts: List[str] = item["paddleocr_result"]["rec_texts"]
@@ -54,7 +63,19 @@ class PaddleBBoxMapper:
         rect_norms_sorted = [self._normalize(t) for t in rect_texts_sorted]
 
         # filter junk/empties
-        keep_mask = [len(n) >= self.min_rect_norm_len for n in rect_norms_sorted]
+        keep_mask = []
+        for raw, norm in zip(rect_texts_sorted, rect_norms_sorted):
+            if not norm:
+                keep_mask.append(False)
+                continue
+
+            # CJK (Chinese Junk Characters) glyphs: require length >= 2
+            if self._has_cjk(raw):
+                keep_mask.append(len(norm) >= self.min_rect_norm_len)
+            else:
+                # Latin scripts: allow single chars like "I", "A"
+                keep_mask.append(len(norm) >= 1)
+
         rect_texts_f = [t for t,k in zip(rect_texts_sorted, keep_mask) if k]
         rec_boxes_f  = [b for b,k in zip(rec_boxes_sorted,  keep_mask) if k]
         rec_polys_f  = [p for p,k in zip(rec_polys_sorted, keep_mask) if k]
@@ -80,6 +101,13 @@ class PaddleBBoxMapper:
         ) = self._sort_and_filter(item)
 
         dialogs = item.get("parsed_dialogue", [])
+        for i, dlg in enumerate(dialogs):
+            if not isinstance(dlg, dict):
+                raise TypeError(
+                    f"map_image_item expects parsed_dialogue to be dicts, "
+                    f"got {type(dlg)} at index {i}"
+                )
+
         claimed: set[int] = set()
         start_cursor = 0
 
@@ -91,6 +119,31 @@ class PaddleBBoxMapper:
             matched_start: Optional[int] = None
             matched_end: Optional[int] = None
 
+            # ---- FAST PATH for long dialogues ----
+            if len(dlg_norm) > self.LONG_DIALOGUE_THRESHOLD:
+                for idx, rect_norm in enumerate(rect_norms_f):
+                    if rect_norm and rect_norm in dlg_norm and idx not in claimed:
+                        bbox = rec_boxes_f[idx]
+                        poly = rec_polys_f[idx]
+                        orig_idx = filtered_to_orig[idx]
+
+                        dlg["paddle_bbox"] = {
+                            "x1": bbox[0], "y1": bbox[1],
+                            "x2": bbox[2], "y2": bbox[3],
+                            "poly": poly,
+                            "matched_rec_text_index": idx,
+                            "matched_rec_text_index_orig": orig_idx,
+                        }
+
+                        claimed.add(idx)
+                        start_cursor = idx + 1
+                        matched = True
+                        break
+
+                if matched:
+                    continue
+
+            # ---- This is for shorter dialogues----
             i = start_cursor
             while i < len(rect_norms_f):
                 if i in claimed:
@@ -106,17 +159,17 @@ class PaddleBBoxMapper:
                 ):
                     concat += rect_norms_f[j]
 
-                    if dlg_norm.startswith(concat):
+                    if dlg_norm.startswith(concat) or concat.startswith(dlg_norm[:len(concat)]):
                         coverage = len(concat) / max(1, len(dlg_norm))
-                        if coverage >= self.min_coverage or (
-                            len(concat) >= self.min_chars and coverage >= 0.35
-                        ):
+                        if coverage >= self.min_coverage or len(concat) >= len(dlg_norm) * 0.5:
                             matched = True
                             matched_start = i
                             matched_end = j
                             break
                     else:
-                        break
+                        j += 1
+                        continue
+
                     j += 1
 
                 if matched and matched_start is not None and matched_end is not None:

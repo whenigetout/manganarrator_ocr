@@ -53,7 +53,7 @@ def main():
     print(f"📖 Config: {CONFIG_PATH}")
     print(f"🧪 Mock mode: {'ON' if MOCK_MODE else 'OFF'}")
 
-    test_item_mapping()
+    test_paddle_mapping()
 
 if __name__ == "__main__":
     main()

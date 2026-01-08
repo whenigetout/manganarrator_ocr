@@ -10,7 +10,8 @@ import json
 # For rich spinner/loading spinner in console
 from rich.console import Console
 from PIL import Image
-from app.models.domain import DialogueLineResponse, ParseDialogueError, MediaRef
+from app.models.domain import DialogueLineResponse, MediaRef
+from app.models.exceptions import ParseDialogueError
 
 from pydantic import BaseModel
 

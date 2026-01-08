@@ -12,11 +12,13 @@ import os
 from collections import defaultdict
 from PIL import Image
 from app.models.domain import (
-    MediaRef, InferImageResponse, InferImageError, DialogueLineResponse, 
-    OCRImage, ProcessImageError, OCRRunError, OCRRunResponse,
-    SaveJSONError, MediaNamespace, PaddleAugmentedOCRRunResponse,
-    PaddleAugmentationError
+    MediaRef, InferImageResponse,  DialogueLineResponse, 
+    OCRImage,  OCRRunResponse,
+    MediaNamespace, PaddleAugmentedOCRRunResponse
     )
+from app.models.exceptions import (
+    InferImageError,ProcessImageError, OCRRunError, SaveJSONError, PaddleAugmentationError
+)
 import app.utils as utils
 import app.models.domain_states as ds
 import httpx
@@ -288,9 +290,10 @@ class OCRProcessor:
                          ) -> Tuple[MediaRef, PaddleAugmentedOCRRunResponse]:
         try:
             async with httpx.AsyncClient() as client:
+                json_rel_path = str(json_path.relative_to(Path(self.media_root)/MediaNamespace.OUTPUTS.value))
                 resp = await client.post(
                         self.paddle_ocr_api,  # URL from config
-                        data={"ocr_json_path": str(json_path)}
+                        data={"ocr_json_path": json_path}
                     )
                 if resp.status_code != 200:
                     raise PaddleAugmentationError(f"⚠️ PaddleOCR augmentation failed for {json_path}: {resp.text}")

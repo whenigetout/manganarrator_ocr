@@ -12,9 +12,11 @@ from app.utils import log_exception, preprocess_and_split_tall_images
 from glob import glob
 import httpx 
 from app.special_utils.paddle_bbox_mapper import PaddleBBoxMapper
-from app.models.domain import OCRRunError, MediaRef, PaddleAugmentedOCRRunResponse, PaddleOCRImage, OCRRunResponse, MediaNamespace
+from app.models.domain import MediaRef, PaddleAugmentedOCRRunResponse, PaddleOCRImage, OCRRunResponse, MediaNamespace, scale_paddle_bbox_to_original
 import app.models.domain_states as ds
 from app.utils import save_model_json
+from mn_contracts.ocr import OCRRun
+from app.models.domain_to_contract import paddle_augmented_run_to_ocr_run
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -40,105 +42,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def save_checkpoint(ocrrun: OCRRunResponse | PaddleAugmentedOCRRunResponse, error: str):
-    '''
-    Placeholder for a "save checkpoint" fn which allows RESUMING a batch after failure
-    '''
-    pass
-
-def ocr_image_to_bbox_item(img: PaddleOCRImage) -> dict:
+def force_attach_original_bboxes(
+    run: PaddleAugmentedOCRRunResponse,
+) -> None:
     """
-    Adapter: OCRImage / PaddleOCRImage -> dict expected by PaddleBBoxMapper
+    Mutates the run IN PLACE.
+    Ensures every dialogue line with a paddlebbox
+    gets an original_bbox.
     """
-    return {
-        "image_file_name": "",
-        "image_rel_path_from_root": "",
-        "parsed_dialogue": [
-            {
-                "id": dlg.id,
-                "text": dlg.text,
-                # IMPORTANT: mapper will ADD paddle_bbox here
-            }
-            for dlg in (img.parsedDialogueLines or [])
-        ],
-        "paddleocr_result": img.paddleocr_result,
-    }
 
-def annotatePaddleBBoxes(
-        paddle_augmented_ocrrun: PaddleAugmentedOCRRunResponse, 
-        final_json_path: Path,
-        processor: OCRProcessor,
-        bbox_mapper: PaddleBBoxMapper):
-    image_root = Path(
-                str(processor.config.get("input_root_folder"))
-            ).resolve()
-    out_dir_for_images = final_json_path.parent
+    if not run.imageResults:
+        return
 
-    annotation_items = []
-
-    for img in paddle_augmented_ocrrun.imageResults or []:
-        if not img.parsedDialogueLines or not img.inferImageRes or not img.inferImageRes.image_ref:
+    for img in run.imageResults:
+        if (
+            img.paddleResizeInfo is None
+            or not img.parsedDialogueLines
+        ):
             continue
 
-        imgRef = img.inferImageRes.image_ref
-        img_file_name = Path(imgRef.path).name
-        image_rel_path_from_root = str(Path(img.inferImageRes.image_ref.path).parent)
+        for line in img.parsedDialogueLines:
+            if (
+                line.paddlebbox is not None
+                and line.original_bbox is None
+            ):
+                line.original_bbox = scale_paddle_bbox_to_original(
+                    line.paddlebbox,
+                    img.paddleResizeInfo,
+                )
 
-        annotation_items.append({
-            "image_file_name": img_file_name,  # IMPORTANT: must match actual filename
-            "image_rel_path_from_root": image_rel_path_from_root,    # OK if image_root already points correctly
-            "parsed_dialogue": [
-                {
-                    "id": dlg.id,
-                    "paddle_bbox": dlg.paddlebbox.model_dump()
-                    if dlg.paddlebbox else None,
-                }
-                for dlg in img.parsedDialogueLines
-                if dlg.paddlebbox
-            ],
-        })
-
-    saved_imgs = bbox_mapper.annotate_batch(
-        annotation_items,
-        image_root=image_root,
-        out_dir=out_dir_for_images,
-    )
-
-    for p in saved_imgs:
-        print(f"🖼️ Annotated image saved: {p}")
-
-def mapPaddleBBoxes(
-        new_json_path: str, 
-        bbox_mapper: PaddleBBoxMapper,
-        ):
-    with open(new_json_path, "r", encoding="utf-8") as f:
-        raw = json.load(f)
-
-        raw["ocr_json_file"] = MediaRef(
-            namespace=MediaNamespace.OUTPUTS,
-            path=""
-        )
-        ocr_run = PaddleAugmentedOCRRunResponse.model_validate(raw)
-        paddle_augmented_ocrrun = bbox_mapper.map_and_save_paddle_bboxes(ocr_run, Path(new_json_path))
-
-        return paddle_augmented_ocrrun
-
-@app.get(
-        "/paddle_augmented_ocr_run",
-    response_model=PaddleAugmentedOCRRunResponse,
-    include_in_schema=True,
-)
-def schema_paddle_augmented_ocr_run():
-    """
-    Schema-only endpoint.
-
-    This endpoint exists solely to expose the
-    PaddleAugmentedOCRRunResponse model to OpenAPI
-    so frontend tooling can generate types.
-
-    Do not call this endpoint at runtime.
-    """
-    raise RuntimeError("Schema-only endpoint. Do not call.")
 
 @app.post("/ocr/run_paddle")
 async def run_paddle(
@@ -169,6 +101,16 @@ async def run_paddle(
             json_path=json_pre_paddle_path,
             bbox_mapper=bbox_mapper,
             annotate_bboxes=annotate_bboxes
+        )
+        force_attach_original_bboxes(paddle_augm_ocr_run)
+
+        ocrrun_json_path = paddle_augmented_json.resolve(Path(processor.media_root)).parent / "ocrrun.json"
+        ocrrun_json_namespace_path = Path(processor.media_root) / MediaNamespace.OUTPUTS.value
+        ocrrun: OCRRun = paddle_augmented_run_to_ocr_run(paddle_augm_ocr_run, ocrrun_json_path, ocrrun_json_namespace_path)
+        
+        save_model_json(
+            model=ocrrun,
+            json_path=ocrrun_json_path
         )
 
         response = {
@@ -240,88 +182,46 @@ async def ocr_from_folder(
         log_exception("Exception during batch processing:")
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-
-
-@app.get("/ocr/results")
-async def get_ocr_results(
+@app.post("/debug/annotate_bboxes")
+async def annotate_bboxes(
     request: Request,
-    run_id: str = Query(..., description="The run ID of the OCR batch"),
-):
-    try:
-        processor = request.app.state.processor
-        base_path = Path(processor.media_root) / "outputs" / run_id
-        if not base_path.exists():
-            return JSONResponse(status_code=404, content={"error": "Run ID not found"})
-
-        # Find all nested ocr_output.json files
-        ocr_files = list(base_path.rglob("ocr_output.json"))
-
-        if not ocr_files:
-            return JSONResponse(status_code=404, content={"error": "No OCR outputs found in run folder"})
-
-        results = []
-        for path in ocr_files:
-            rel_path = path.relative_to(base_path)
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                results.append({
-                    "path": str(rel_path),
-                    "count": len(data)
-                })
-            except Exception as e:
-                results.append({
-                    "path": str(rel_path),
-                    "error": f"Failed to read file: {str(e)}"
-                })
-
-        return {
-            "status": "success",
-            "run_id": run_id,
-            "files": results,
-            "total": sum(item.get("count", 0) for item in results if "count" in item)
-        }
-
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
-
-@app.post("/debug/map_paddle_bboxes")
-async def debug_map_paddle_bboxes(
-    request: Request,
-    json_path: str = Form(
-        ...,
-        description="Path to *_with_paddle.json or paddle-augmented OCR JSON"
+    input_path: str = Form(
+        ..., 
+        description="Relative path of json file under media_root/outputs/, e.g. test_mangas/test_manga1/ocr_json_with_bboxes.json"
     ),
-    annotate_bboxes: bool = Form(
-        False,
-        description="Whether to also save annotated images"
-    )
 ):
-    """
-    Debug endpoint to test mapPaddleBBoxes() in isolation.
-    Calls the existing function directly. No duplicated logic.
-    """
-    try:
-        bbox_mapper = request.app.state.bbox_mapper
-        json_path_ = Path(json_path).resolve()
-        if not json_path_.exists():
-            return JSONResponse(
-                status_code=400,
-                content={"error": f"JSON file not found: {json_path_}"}
-            )
 
-        # 🔑 reuse existing logic — single source of truth
-        mapPaddleBBoxes(
-            new_json_path=str(json_path_),
-            bbox_mapper=bbox_mapper,
+    try:
+
+        json_with_bboxes_Ref: MediaRef = MediaRef(
+            namespace=MediaNamespace.OUTPUTS,
+            path=input_path
         )
 
-        return {
+        processor: OCRProcessor = request.app.state.processor
+        bbox_mapper: PaddleBBoxMapper = request.app.state.bbox_mapper
+
+        json_with_bboxes_path = json_with_bboxes_Ref.resolve(Path(processor.media_root))
+        if not json_with_bboxes_path.exists() or not json_with_bboxes_path.is_file():
+            return JSONResponse(status_code=400, content={"error": "Invalid file path"})
+        
+        with open(json_with_bboxes_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+
+            ocr_run = PaddleAugmentedOCRRunResponse.model_validate(raw)
+
+        res = processor.annotatePaddleBBoxes(
+            ocr_run,
+            json_with_bboxes_path,
+            bbox_mapper
+        )
+
+        response = {
             "status": "success",
-            "input_json": str(json_path_),
-            "message": "mapPaddleBBoxes executed successfully"
         }
 
+        return response
+
     except Exception as e:
-        log_exception("debug_map_paddle_bboxes")
+        log_exception("Exception during batch processing:")
         return JSONResponse(status_code=500, content={"error": str(e)})

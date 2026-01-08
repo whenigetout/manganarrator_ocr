@@ -4,7 +4,8 @@ from pathlib import Path
 from PIL import Image
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration, BitsAndBytesConfig, Qwen3VLForConditionalGeneration
 from typing import List, Dict, Optional, Union
-from app.models.domain import MediaRef, InferImageResponse, InferImageError
+from app.models.domain import MediaRef, InferImageResponse
+from app.models.exceptions import InferImageError
 
 from app.utils import Timer
 from qwen_vl_utils import process_vision_info
