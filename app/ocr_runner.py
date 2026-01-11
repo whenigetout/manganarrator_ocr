@@ -107,10 +107,10 @@ class OCRProcessor:
             raise
 
     def process_image_pre_paddle(self, imgRef: MediaRef, 
+                                image_id: str,
                       prompt: Optional[str]=None
                       ) -> OCRImage:
         try:
-            image_id = str(uuid.uuid4())
             img_path = imgRef.resolve(Path(self.media_root))
             img_name = img_path.name
 
@@ -162,7 +162,7 @@ class OCRProcessor:
 
             print(f"🔎 Found {len(image_paths)} image(s) under: {folder_path}")
             processImageResults = []
-            for img_path in image_paths:
+            for idx, img_path in enumerate(image_paths):
                 path_base = inputfolderRef.namespace_path(Path(self.media_root))
                 imgRef = MediaRef(
                     namespace=inputfolderRef.namespace,
@@ -170,6 +170,7 @@ class OCRProcessor:
                 )
                 processImageResult = self.process_image_pre_paddle(
                     imgRef=imgRef,
+                    image_id=str(idx + 1),
                     prompt=prompt
                 )
                 processImageResults.append(processImageResult)
