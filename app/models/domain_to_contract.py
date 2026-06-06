@@ -56,7 +56,7 @@ def paddle_augmented_run_to_ocr_run(
     ocr_json_path: Path,
     namespace_path: Path
 ) -> OCRRun:
-    images: Optional[List[OCRImage]] = None
+    images: Optional[List[OCRImage]] 
 
     if src.imageResults:
         images = [_convert_image(img) for img in src.imageResults]
@@ -77,7 +77,7 @@ def paddle_augmented_run_to_ocr_run(
 # ---------------------------------------------------------------------
 
 def _convert_image(img: PaddleOCRImage) -> OCRImage:
-    image_info: ImageInfo | None = None
+    image_info: ImageInfo 
 
     if img.inferImageRes is not None:
         image_info = ImageInfo(
@@ -88,7 +88,7 @@ def _convert_image(img: PaddleOCRImage) -> OCRImage:
             image_height=img.inferImageRes.image_height,
         )
 
-    dialogue_lines: list[DialogueLine] | None = None
+    dialogue_lines: list[DialogueLine] 
 
     if img.parsedDialogueLines:
         dialogue_lines = [
@@ -100,18 +100,24 @@ def _convert_image(img: PaddleOCRImage) -> OCRImage:
         image_id=img.image_id,
         image_info=image_info,
         dialogue_lines=dialogue_lines,
+        has_text=img.has_text
     )
 
 
 def _convert_dialogue_line(
     line: PaddleDialogueLineResponse,
 ) -> DialogueLine:
-    return DialogueLine(
-        id=line.id,
-        image_id=line.image_id,
-        speaker=line.speaker,
-        gender=line.gender,
-        emotion=line.emotion,
-        text=line.text,
-        original_bbox=to_contract_bbox(line.original_bbox),
-    )
+    try:
+        return DialogueLine(
+            id=line.id,
+            image_id=line.image_id,
+            speaker=line.speaker,
+            gender=line.gender,
+            emotion=line.emotion,
+            text=line.text,
+            original_bbox=to_contract_bbox(line.original_bbox),
+            status=line.status,
+            error=line.error
+        )
+    except:
+        raise

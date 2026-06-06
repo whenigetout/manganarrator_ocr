@@ -23,6 +23,7 @@ import app.utils as utils
 import app.models.domain_states as ds
 import httpx
 from app.special_utils.paddle_bbox_mapper import PaddleBBoxMapper
+from fastapi import HTTPException
 
 def natural_key(s):
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
@@ -138,6 +139,7 @@ class OCRProcessor:
                 image_id=image_id,
                 inferImageRes=result,
                 parsedDialogueLines=parsed_dialogue_lines,
+                has_text=len(parsed_dialogue_lines) > 0
             )
 
         except Exception as e:
@@ -278,6 +280,12 @@ class OCRProcessor:
                 namespace=MediaNamespace.OUTPUTS,
                 path=""
             )
+
+            for img in raw["imageResults"]:
+                for dlg in img["parsedDialogueLines"]:
+                    dlg["status"] = "ok"
+                    dlg["error"] = None
+
             ocr_run = PaddleAugmentedOCRRunResponse.model_validate(raw)
             paddle_augmented_ocrrun = bbox_mapper.map_and_save_paddle_bboxes(ocr_run, Path(new_json_path))
 
@@ -290,11 +298,26 @@ class OCRProcessor:
                                 annotate_bboxes: Optional[bool] = False
                          ) -> Tuple[MediaRef, PaddleAugmentedOCRRunResponse]:
         try:
-            async with httpx.AsyncClient() as client:
+
+            timeout = httpx.Timeout(
+                connect=10.0,
+                read=120.0,   # THIS is the important one
+                write=10.0,
+                pool=10.0
+            )
+
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 json_rel_path = str(json_path.relative_to(Path(self.media_root)/MediaNamespace.OUTPUTS.value))
-                resp = await client.post(
-                        self.paddle_ocr_api,  # URL from config
-                        data={"ocr_json_path": json_path}
+
+                try:
+                    resp = await client.post(
+                            self.paddle_ocr_api,  # URL from config
+                            data={"ocr_json_path": json_path}
+                        )
+                except httpx.ReadTimeout as e:
+                    raise HTTPException(
+                        status_code=504,
+                        detail="PaddleOCR timed out while processing large images"
                     )
                 if resp.status_code != 200:
                     raise PaddleAugmentationError(f"⚠️ PaddleOCR augmentation failed for {json_path}: {resp.text}")

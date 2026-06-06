@@ -115,6 +115,9 @@ class PaddleBBoxMapper:
             dlg_text = dlg.get("text", "")
             dlg_norm = self._normalize(dlg_text)
 
+            # set default status
+            dlg["status"] = "ok"
+
             matched = False
             matched_start: Optional[int] = None
             matched_end: Optional[int] = None
@@ -197,6 +200,9 @@ class PaddleBBoxMapper:
                     "matched_rec_text_index_orig": orig_start         # original Paddle index
                 }
 
+                dlg["status"] = "ok"
+                dlg["error"] = None
+
                 if self.debug:
                     span_preview = " | ".join(
                         rect_texts_f[matched_start:matched_end+1][: self.debug_preview_count]
@@ -208,6 +214,11 @@ class PaddleBBoxMapper:
                     )
             else:
                 dlg["paddle_bbox"] = None
+                dlg["status"] = "failed"
+                if not rec_boxes_f:
+                    dlg["error"] = "Paddleocr failed, no bbox drawn from paddle ocr"
+                else:
+                    dlg["error"] = "Mapping bbox to dialogue failed, Paddleocr bboxes EXIST"
                 if self.debug:
                     print(f"[MISS] dlg#{dlg.get('id')} -> no match")
 
@@ -375,26 +386,34 @@ class PaddleBBoxMapper:
             # --- run existing logic (IN PLACE on dict) ---
             self.map_image_item(item_dict)
 
-            # --- copy ONLY paddlebbox back into models ---
-            bbox_by_id = {
-                d["id"]: d.get("paddle_bbox")
+            # --- copy fields back into models ---
+            dlg_by_id = {
+                d["id"]: {
+                    "paddle_bbox": d.get("paddle_bbox"),
+                    "status": d.get("status"),
+                    "error": d.get("error"),
+                }
                 for d in item_dict["parsed_dialogue"]
             }
 
-            for i, dlg in enumerate(image.parsedDialogueLines):
-                # image.parsedDialogueLines[i] = PaddleDialogueLineResponse(
-                #     **dlg.model_dump(),
-                #     paddlebbox=bbox_by_id.get(dlg.id),
-                # )
-                bbox_dict = bbox_by_id.get(dlg.id)
-                dlg.paddlebbox = PaddleBBox.model_validate(bbox_dict) if bbox_dict else None
+            for dlg in image.parsedDialogueLines:
+                dlg_data = dlg_by_id.get(dlg.id)
 
-        # --- save without structural mutation ---
-        # out_json_path.parent.mkdir(parents=True, exist_ok=True)
-        # final_json_path = Path(out_json_path).parent / "ocr_output_with_bboxes.json"
-        # out_json_path.write_text(
-        #     run.model_dump_json(indent=2),
-        #     encoding="utf-8",
-        # )
+                if not dlg_data:
+                    raise  # or handle missing mapping explicitly
+
+                bbox_dict = dlg_data["paddle_bbox"]
+                dlg_status = dlg_data["status"]
+                dlg_error = dlg_data["error"]
+
+                dlg.paddlebbox = (
+                    PaddleBBox.model_validate(bbox_dict)
+                    if bbox_dict
+                    else None
+                )
+
+                # store status/error on the dialogue model
+                dlg.status = dlg_status
+                dlg.error = dlg_error
 
         return run

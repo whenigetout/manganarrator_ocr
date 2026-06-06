@@ -57,6 +57,7 @@ def force_attach_original_bboxes(
     for img in run.imageResults:
         if (
             img.paddleResizeInfo is None
+            or not img.has_text
             or not img.parsedDialogueLines
         ):
             continue

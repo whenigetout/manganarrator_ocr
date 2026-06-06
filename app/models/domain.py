@@ -76,6 +76,7 @@ class PaddleResizeInfo(BaseModel):
 
 class OCRImage(BaseModel):
     image_id: str
+    has_text: bool
     inferImageRes: Optional[InferImageResponse] = None
     parsedDialogueLines: Optional[list[DialogueLineResponse]] = None
     paddleResizeInfo: Optional[PaddleResizeInfo] = None
@@ -118,6 +119,8 @@ class OriginalImageBBox(BaseModel):
     y2: float
 
 class PaddleDialogueLineResponse(DialogueLineResponse):
+    status: Literal["ok", "failed"]
+    error: Optional[str] = None
     paddlebbox: Optional[PaddleBBox] = None
     original_bbox: Optional[OriginalImageBBox] = None
 

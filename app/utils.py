@@ -140,7 +140,7 @@ def parse_dialogue(text: str, image_id: str) -> List[DialogueLineResponse]:
                )
 
         if not dialogueLines:
-            raise ParseDialogueError("⚠️ No valid dialogue lines found — check input format.")
+            return dialogueLines  # may be empty
         return dialogueLines
     except Exception as e:
         raise ParseDialogueError from e

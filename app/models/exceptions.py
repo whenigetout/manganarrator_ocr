@@ -16,3 +16,6 @@ class PaddleAugmentationError(Exception):
 
 class SaveJSONError(Exception):
     pass
+
+class NoDialogueError(Exception):
+    pass
