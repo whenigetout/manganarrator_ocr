@@ -2,26 +2,24 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from pathlib import Path
+
+
+GITHUB_PACKAGE = (
+    "git+https://github.com/whenigetout/manganarrator_contracts.git"
+    "@main#subdirectory=python"
+)
 
 
 def main() -> int:
-    service_root = Path(__file__).resolve().parents[1]
-    contracts_root = service_root.parent / "manganarrator_contracts" / "python"
-
-    if not contracts_root.exists():
-        print(f"[contracts] Skipping sync; not found: {contracts_root}")
-        return 0
-
-    print(f"[contracts] Syncing mn-contracts from {contracts_root}")
+    print(f"[contracts] Installing mn-contracts from GitHub...")
     subprocess.check_call([
         sys.executable,
         "-m",
         "pip",
         "install",
-        "-e",
-        str(contracts_root),
+        GITHUB_PACKAGE,
     ])
+    print("[contracts] mn-contracts is up to date.")
     return 0
 
 
