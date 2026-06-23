@@ -8,6 +8,7 @@ ENV_NAME="qwen"
 
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate "$ENV_NAME"
+python scripts/sync_contracts.py
 
 echo "🚀 Starting OCR FastAPI server..."
 uvicorn ocr_server:app --host 0.0.0.0 --port 7860 --reload

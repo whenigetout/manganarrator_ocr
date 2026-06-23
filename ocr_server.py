@@ -15,6 +15,7 @@ from app.special_utils.paddle_bbox_mapper import PaddleBBoxMapper
 from app.models.domain import MediaRef, PaddleAugmentedOCRRunResponse, PaddleOCRImage, OCRRunResponse, MediaNamespace, scale_paddle_bbox_to_original
 import app.models.domain_states as ds
 from app.utils import save_model_json
+import mn_contracts.ocr as contract_ocr
 from mn_contracts.ocr import OCRRun
 from app.models.domain_to_contract import paddle_augmented_run_to_ocr_run
 
@@ -73,6 +74,59 @@ def force_attach_original_bboxes(
                 )
 
 
+def domain_run_to_contract_ocr_run(
+    run: OCRRunResponse | PaddleAugmentedOCRRunResponse,
+    ocrrun_json_path: Path,
+    outputs_namespace_path: Path,
+) -> contract_ocr.OCRRun:
+    images: list[contract_ocr.OCRImage] = []
+    for img in run.imageResults or []:
+        if img.inferImageRes is None:
+            raise ValueError(f"Cannot convert image {img.image_id}: missing image info")
+
+        dialogue_lines: list[contract_ocr.DialogueLine] = []
+        for line in img.parsedDialogueLines or []:
+            bbox = getattr(line, "original_bbox", None)
+            dialogue_lines.append(contract_ocr.DialogueLine(
+                id=int(line.id),
+                image_id=int(line.image_id),
+                speaker=line.speaker,
+                gender=line.gender,
+                emotion=line.emotion,
+                text=line.text,
+                status=getattr(line, "status", "ok"),
+                error=getattr(line, "error", None),
+                original_bbox=contract_ocr.OriginalImageBBox(
+                    x1=bbox.x1,
+                    y1=bbox.y1,
+                    x2=bbox.x2,
+                    y2=bbox.y2,
+                ) if bbox is not None else None,
+            ))
+
+        images.append(contract_ocr.OCRImage(
+            image_id=int(img.image_id),
+            has_text=img.has_text,
+            image_info=contract_ocr.ImageInfo(
+                image_ref=contract_ocr.MediaRef(
+                    namespace=contract_ocr.MediaNamespace.INPUTS,
+                    path=img.inferImageRes.image_ref.path,
+                ),
+                image_width=img.inferImageRes.image_width,
+                image_height=img.inferImageRes.image_height,
+            ),
+            dialogue_lines=dialogue_lines,
+        ))
+
+    return contract_ocr.OCRRun(
+        run_id=run.run_id,
+        error=run.error,
+        ocr_json_file=contract_ocr.MediaRef(
+            namespace=contract_ocr.MediaNamespace.OUTPUTS,
+            path=ocrrun_json_path.relative_to(outputs_namespace_path).as_posix(),
+        ),
+        images=images,
+    )
 @app.post("/ocr/run_paddle")
 async def run_paddle(
     request: Request,
@@ -160,23 +214,39 @@ async def ocr_from_folder(
             custom_prompt=custom_prompt
         )
 
-        paddle_augmented_json: MediaRef
+        source_for_editor: OCRRunResponse | PaddleAugmentedOCRRunResponse = ocrrun
+        paddle_augmented_json: MediaRef | None = None
         if attach_bboxes:
             paddle_augmented_json, paddle_augm_ocr_run = await processor.run_batch_paddle(
                 json_path=saved_json_path,
                 bbox_mapper=bbox_mapper,
                 annotate_bboxes=annotate_bboxes
             )
+            force_attach_original_bboxes(paddle_augm_ocr_run)
+            source_for_editor = paddle_augm_ocr_run
+
+        outputs_namespace_path = Path(processor.media_root) / MediaNamespace.OUTPUTS.value
+        ocrrun_json_path = saved_json_path.parent / "ocrrun.json"
+        contract_ocrrun = domain_run_to_contract_ocr_run(
+            source_for_editor,
+            ocrrun_json_path,
+            outputs_namespace_path,
+        )
+        save_model_json(
+            model=contract_ocrrun,
+            json_path=ocrrun_json_path
+        )
 
         response = {
             "status": "success",
             "run_id": run_id,
-            "count": len(ocrrun.imageResults) if ocrrun.imageResults else 0,
+            "count": len(contract_ocrrun.images),
+            "ocr_json_file": contract_ocrrun.ocr_json_file,
             "json_pre_paddle": saved_ocr_json_ref,
             "json_post_paddle": paddle_augmented_json if attach_bboxes else None
         }
         if output_all_results_to_json:
-            response["ocr_run"] = ocrrun
+            response["ocr_run"] = contract_ocrrun
         return response
 
     except Exception as e:
