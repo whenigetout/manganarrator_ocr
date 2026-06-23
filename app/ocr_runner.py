@@ -75,15 +75,17 @@ class OCRProcessor:
             config_min_img_chunk_size = self.config.get("min_chunk_size", 4800)
             config_max_img_chunk_size = self.config.get("max_chunk_size", 7000)
 
-            utils.preprocess_and_split_tall_images(folderRef=folderRef, 
-                                            media_root=self.media_root,
-                                            max_chunk=config_max_img_chunk_size,
-                                            min_chunk=config_min_img_chunk_size)
+            normalized_folder_ref = utils.preprocess_and_split_tall_images(
+                folderRef=folderRef,
+                media_root=self.media_root,
+                max_chunk=config_max_img_chunk_size,
+                min_chunk=config_min_img_chunk_size,
+            )
             
             ocrrun = self.process_batch_pre_paddle(
-                                            folderRef,
-                                            run_id=run_id,
-                                            prompt=custom_prompt
+                normalized_folder_ref,
+                run_id=run_id,
+                prompt=custom_prompt,
                 )
             
             # This is an intentional try-catch to allow resuming failed batches in the future
@@ -281,8 +283,8 @@ class OCRProcessor:
                 path=""
             )
 
-            for img in raw["imageResults"]:
-                for dlg in img["parsedDialogueLines"]:
+            for img in raw.get("imageResults") or []:
+                for dlg in img.get("parsedDialogueLines") or []:
                     dlg["status"] = "ok"
                     dlg["error"] = None
 

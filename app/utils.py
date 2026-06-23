@@ -95,6 +95,47 @@ class Timer:
             )
 
 
+def _is_no_dialogue_marker(line: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", " ", line.casefold()).strip()
+    if not normalized:
+        return True
+    no_dialogue_markers = {
+        "no dialogue",
+        "no dialogue lines",
+        "no dialogue lines found",
+        "no readable dialogue",
+        "no readable text",
+        "no text",
+        "none",
+        "n a",
+    }
+    return normalized in no_dialogue_markers
+
+
+def _coerce_raw_dialogue(line: str) -> str | None:
+    line = re.sub(r"^\s*[-*]\s*", "", line).strip()
+    line = re.sub(r"^(?:dialogue|text|line)\s*[:：]\s*", "", line, flags=re.IGNORECASE).strip()
+    line = line.strip("\"'“”")
+    if not line or _is_no_dialogue_marker(line):
+        return None
+    if len(line) > 220:
+        return None
+
+    alpha_chars = [c for c in line if c.isalpha()]
+    uppercase_ratio = (
+        sum(1 for c in alpha_chars if c.isupper()) / len(alpha_chars)
+        if alpha_chars else 0
+    )
+    looks_spoken = (
+        line.endswith(("!", "?", "..."))
+        or uppercase_ratio > 0.55
+        or bool(re.search(r"^[\"'“”].+[\"'“”]$", line))
+    )
+    if not looks_spoken:
+        return None
+    return line
+
+
 def parse_dialogue(text: str, image_id: str) -> List[DialogueLineResponse]:
     """
     Parses raw OCR text output into structured JSON.
@@ -111,9 +152,13 @@ def parse_dialogue(text: str, image_id: str) -> List[DialogueLineResponse]:
             re.IGNORECASE
         )
 
+        unmatched_lines: list[tuple[int, str]] = []
+
         for i, line in enumerate(text.strip().splitlines(), start=1):
             line = line.strip()
             if not line:
+                continue
+            if _is_no_dialogue_marker(line):
                 continue
 
             match = strict_pattern.match(line)
@@ -125,12 +170,12 @@ def parse_dialogue(text: str, image_id: str) -> List[DialogueLineResponse]:
                     speaker, gender, emotion, content = match.groups()
                     print(f"⚠️ Loose parse used for line {i}: {line}")
                 else:
-                    print(f"❌ Failed to parse line {i}: {line}")
+                    unmatched_lines.append((i, line))
                     continue
 
             dialogueLines.append(
                 DialogueLineResponse(
-                    id=i,
+                    id=len(dialogueLines) + 1,
                     image_id=image_id,
                     speaker=speaker.strip(),
                     gender=gender.strip(),
@@ -138,6 +183,23 @@ def parse_dialogue(text: str, image_id: str) -> List[DialogueLineResponse]:
                     text=fix_casing(content).strip()
                 )
                )
+
+        if not dialogueLines and unmatched_lines:
+            for source_line_num, raw_line in unmatched_lines:
+                content = _coerce_raw_dialogue(raw_line)
+                if content is None:
+                    print(f"⚠️ Ignored non-dialogue OCR line {source_line_num}: {raw_line}")
+                    continue
+                dialogueLines.append(
+                    DialogueLineResponse(
+                        id=len(dialogueLines) + 1,
+                        image_id=image_id,
+                        speaker="Speaker 1",
+                        gender="unknown",
+                        emotion="neutral",
+                        text=fix_casing(content).strip(),
+                    )
+                )
 
         if not dialogueLines:
             return dialogueLines  # may be empty
@@ -239,12 +301,161 @@ def optimal_split(image_path, output_prefix, max_chunk=7000, min_chunk=4000):
 
     print(f"Done. Total splits: {len(cuts)}")
 
-def preprocess_and_split_tall_images(folderRef: MediaRef, media_root: str, max_chunk, min_chunk) -> None:
+IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
+
+
+def _natural_path_key(path: Path):
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', path.name)]
+
+
+def _prepare_rgb_image(path: Path) -> Image.Image:
+    img = Image.open(path)
+    if img.mode in ("RGBA", "LA"):
+        background = Image.new("RGB", img.size, (255, 255, 255))
+        background.paste(img, mask=img.getchannel("A"))
+        img.close()
+        return background
+    return img.convert("RGB")
+
+
+def _vertical_cuts(height: int, max_chunk: int, min_chunk: int) -> list[tuple[int, int]]:
+    if height <= max_chunk:
+        return [(0, height)]
+
+    q = height // max_chunk
+    r = height % max_chunk
+    sizes: list[int] = []
+
+    if r >= min_chunk:
+        sizes = [max_chunk] * q + [r]
+    else:
+        merged_tail = height - (q - 1) * max_chunk
+        half1 = merged_tail // 2
+        half2 = merged_tail - half1
+        sizes = [max_chunk] * max(0, q - 1) + [half1, half2]
+
+    cuts = []
+    y = 0
+    for size in sizes:
+        cuts.append((y, min(height, y + size)))
+        y += size
+    return cuts
+
+
+def _save_vertical_stack(image_paths: list[Path], out_path: Path) -> None:
+    opened = [_prepare_rgb_image(path) for path in image_paths]
+    try:
+        max_width = max(img.width for img in opened)
+        total_height = sum(img.height for img in opened)
+        canvas = Image.new("RGB", (max_width, total_height), (255, 255, 255))
+        y = 0
+        for img in opened:
+            x = (max_width - img.width) // 2
+            canvas.paste(img, (x, y))
+            y += img.height
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        canvas.save(out_path, quality=95)
+    finally:
+        for img in opened:
+            img.close()
+
+
+def _save_split_image(image_path: Path, out_dir: Path, start_index: int, max_chunk: int, min_chunk: int) -> int:
+    img = _prepare_rgb_image(image_path)
+    try:
+        next_index = start_index
+        for y1, y2 in _vertical_cuts(img.height, max_chunk=max_chunk, min_chunk=min_chunk):
+            out_path = out_dir / f"page_{next_index:04d}.jpg"
+            img.crop((0, y1, img.width, y2)).save(out_path, quality=95)
+            next_index += 1
+        return next_index
+    finally:
+        img.close()
+
+
+def preprocess_and_split_tall_images(folderRef: MediaRef, media_root: str, max_chunk, min_chunk) -> MediaRef:
     """
-    Scans all images in a folder. If any are taller than max_chunk, splits them using optimal_split,
-    replaces originals with split images, and logs actions clearly.
+    Creates a generated, normalized image sequence for OCR/video.
+
+    - Very tall source images are split into sane vertical chunks.
+    - Very short consecutive source images are merged until they form a useful chunk.
+    - The original scraped folder is left untouched.
     """
-    exts = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
+    folder_path = folderRef.resolve(Path(media_root))
+    if Path(folderRef.path).parts[:1] == ("_normalized",):
+        return folderRef
+
+    normalized_rel_path = (Path("_normalized") / Path(folderRef.path)).as_posix()
+    normalized_ref = MediaRef(namespace=folderRef.namespace, path=normalized_rel_path)
+    normalized_folder = normalized_ref.resolve(Path(media_root))
+
+    image_files = sorted(
+        [p for p in folder_path.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS],
+        key=_natural_path_key,
+    )
+    if not image_files:
+        return folderRef
+
+    if normalized_folder.exists():
+        shutil.rmtree(normalized_folder)
+    normalized_folder.mkdir(parents=True, exist_ok=True)
+
+    merge_max_chunk = max_chunk + max(512, int(max_chunk * 0.08))
+    page_index = 1
+    pending_stack: list[Path] = []
+    pending_height = 0
+
+    def flush_pending() -> None:
+        nonlocal page_index, pending_stack, pending_height
+        if not pending_stack:
+            return
+        out_path = normalized_folder / f"page_{page_index:04d}.jpg"
+        _save_vertical_stack(pending_stack, out_path)
+        print(
+            f"[Normalize] merged {len(pending_stack)} source image(s) "
+            f"into {out_path.name}"
+        )
+        page_index += 1
+        pending_stack = []
+        pending_height = 0
+
+    for img_file in image_files:
+        with Image.open(img_file) as img:
+            height = img.height
+
+        if height > merge_max_chunk:
+            flush_pending()
+            print(f"[Normalize] splitting tall image {img_file.name}: height={height}")
+            page_index = _save_split_image(
+                img_file,
+                normalized_folder,
+                page_index,
+                max_chunk=max_chunk,
+                min_chunk=min_chunk,
+            )
+            continue
+
+        if pending_stack and pending_height >= min_chunk and pending_height + height > merge_max_chunk:
+            flush_pending()
+
+        if pending_stack and pending_height + height > merge_max_chunk:
+            flush_pending()
+
+        pending_stack.append(img_file)
+        pending_height += height
+
+    flush_pending()
+
+    print(f"[Preprocessing] Normalized image sequence saved to: {normalized_folder}\n")
+    return normalized_ref
+
+
+def preprocess_and_split_tall_images_in_place(folderRef: MediaRef, media_root: str, max_chunk, min_chunk) -> None:
+    """
+    Legacy mutating splitter retained for one-off scripts. The service uses
+    preprocess_and_split_tall_images(), which leaves source folders untouched.
+    """
+    exts = IMAGE_EXTS
     folder_path = folderRef.resolve(Path(media_root))
     for img_file in sorted(folder_path.glob('*')):
         if not img_file.suffix.lower() in exts:

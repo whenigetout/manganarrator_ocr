@@ -208,10 +208,20 @@ def scale_paddle_bbox_to_original(
     bbox: PaddleBBox,
     resize_info: PaddleResizeInfo,
 ) -> OriginalImageBBox:
+    # PaddleOCR returns detection boxes in the original image coordinate space.
+    # Keep this as the single conversion point so callers can still ask for
+    # original_bbox without applying a second, incorrect resize ratio.
+    max_x = float(resize_info.original_w)
+    max_y = float(resize_info.original_h)
+    x1 = min(max(float(bbox.x1), 0.0), max_x)
+    y1 = min(max(float(bbox.y1), 0.0), max_y)
+    x2 = min(max(float(bbox.x2), 0.0), max_x)
+    y2 = min(max(float(bbox.y2), 0.0), max_y)
+
     return OriginalImageBBox(
-        x1=bbox.x1 / resize_info.ratio_w,
-        y1=bbox.y1 / resize_info.ratio_h,
-        x2=bbox.x2 / resize_info.ratio_w,
-        y2=bbox.y2 / resize_info.ratio_h,
+        x1=min(x1, x2),
+        y1=min(y1, y2),
+        x2=max(x1, x2),
+        y2=max(y1, y2),
     )
 

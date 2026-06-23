@@ -56,8 +56,7 @@ def paddle_augmented_run_to_ocr_run(
     ocr_json_path: Path,
     namespace_path: Path
 ) -> OCRRun:
-    images: Optional[List[OCRImage]] 
-
+    images: List[OCRImage] = []
     if src.imageResults:
         images = [_convert_image(img) for img in src.imageResults]
 
@@ -77,19 +76,18 @@ def paddle_augmented_run_to_ocr_run(
 # ---------------------------------------------------------------------
 
 def _convert_image(img: PaddleOCRImage) -> OCRImage:
-    image_info: ImageInfo 
+    if img.inferImageRes is None:
+        raise ValueError(f"Cannot convert OCR image {img.image_id}: missing image info")
 
-    if img.inferImageRes is not None:
-        image_info = ImageInfo(
-            image_ref=to_contract_media_ref(
-                img.inferImageRes.image_ref
-            ),
-            image_width=img.inferImageRes.image_width,
-            image_height=img.inferImageRes.image_height,
-        )
+    image_info = ImageInfo(
+        image_ref=to_contract_media_ref(
+            img.inferImageRes.image_ref
+        ),
+        image_width=img.inferImageRes.image_width,
+        image_height=img.inferImageRes.image_height,
+    )
 
-    dialogue_lines: list[DialogueLine] 
-
+    dialogue_lines: list[DialogueLine] = []
     if img.parsedDialogueLines:
         dialogue_lines = [
             _convert_dialogue_line(line)

@@ -159,5 +159,8 @@ SPEAKER = "Speaker 1", "Speaker 2", "Narrator", etc.
 GENDER = "male", "female", or "unknown"
 EMOTION = Pick from: neutral, happy, sad, angry, excited, nervous, aroused, scared, curious, playful, serious, calm
 
-Preserve the original order. Output only the formatted lines.
+If the image has no readable dialogue, output exactly:
+NO_DIALOGUE
+
+Preserve the original order. Output only the formatted lines or NO_DIALOGUE.
 '''
