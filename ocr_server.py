@@ -82,7 +82,8 @@ def domain_run_to_contract_ocr_run(
     images: list[contract_ocr.OCRImage] = []
     for img in run.imageResults or []:
         if img.inferImageRes is None:
-            raise ValueError(f"Cannot convert image {img.image_id}: missing image info")
+            print(f"[ocr] Warning: image id={img.image_id} has no inferImageRes — skipping from contract output")
+            continue
 
         dialogue_lines: list[contract_ocr.DialogueLine] = []
         for line in img.parsedDialogueLines or []:
