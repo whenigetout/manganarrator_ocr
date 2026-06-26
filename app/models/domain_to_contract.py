@@ -58,7 +58,8 @@ def paddle_augmented_run_to_ocr_run(
 ) -> OCRRun:
     images: List[OCRImage] = []
     if src.imageResults:
-        images = [_convert_image(img) for img in src.imageResults]
+        # _convert_image returns None for images with no inferImageRes — filter them out
+        images = [img for img in (_convert_image(img) for img in src.imageResults) if img is not None]
 
     return OCRRun(
         run_id=src.run_id,
@@ -75,9 +76,14 @@ def paddle_augmented_run_to_ocr_run(
 # helpers
 # ---------------------------------------------------------------------
 
-def _convert_image(img: PaddleOCRImage) -> OCRImage:
+def _convert_image(img: PaddleOCRImage) -> OCRImage | None:
+    """Convert a domain OCRImage to a contract OCRImage.
+    Returns None for images that could not be inferred (missing inferImageRes).
+    Text-less images (has_text=False) are included with an empty dialogue_lines list.
+    """
     if img.inferImageRes is None:
-        raise ValueError(f"Cannot convert OCR image {img.image_id}: missing image info")
+        print(f"[ocr] Warning: image id={img.image_id} has no inferImageRes — skipping from contract output")
+        return None
 
     image_info = ImageInfo(
         image_ref=to_contract_media_ref(
