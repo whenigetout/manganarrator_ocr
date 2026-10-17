@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Union, Tuple
 from .config import load_config
 from .utils import ensure_output_dir, save_jsonl, Timer
-from .backends.qwen_backend import QwenOCRBackend
+
 import uuid
 import json
 from datetime import datetime
@@ -52,7 +52,13 @@ class OCRProcessor:
             self.backend = self._init_backend(self.model_name)
 
     def _init_backend(self, model_name: str):
-        if model_name == "qwen2.5vl":
+        if model_name in ("openai", "gemini"):
+            from .backends.hosted_vision_backend import HostedVisionBackend
+            import os
+            os.environ.setdefault("VISION_PROVIDER", model_name)
+            return HostedVisionBackend(self.config)
+        if model_name in ("qwen2.5vl", "qwen3vl"):
+            from .backends.qwen_backend import QwenOCRBackend
             return QwenOCRBackend(self.config)
         else:
             raise ValueError(f"OCR model '{model_name}' not supported.")
