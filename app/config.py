@@ -10,7 +10,9 @@ def load_config(input_config_path: str) -> dict:
         config = yaml.safe_load(f)
 
     # Basic validation
-    required_keys = ["input_root_folder", "output_root_folder", "ocr_model", "qwen_model_id"]
+    required_keys = ["input_root_folder", "output_root_folder", "ocr_model"]
+    if config.get("ocr_model") in ("qwen2.5vl", "qwen3vl"):
+        required_keys.append("qwen_model_id")
     for key in required_keys:
         if key not in config:
             raise ValueError(f"Missing required config key: {key}")
