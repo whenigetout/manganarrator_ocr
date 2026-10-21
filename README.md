@@ -1,3 +1,5 @@
+> Returning to this repo? Start with [AGENTS.md](AGENTS.md) and [project context](docs/PROJECT_CONTEXT.md).
+
 # MangaNarrator OCR
 
 OCR processor module for manga/manhwa panels using Qwen2.5-VL or other models.
